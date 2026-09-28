@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <ctime>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -554,6 +557,23 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     // Load renderdoc module
     VideoCore::LoadRenderDoc();
+    // DEBUG: SOTC_RDOC_AT=<seconds>[,<seconds>...] triggers RenderDoc captures automatically
+    if (const char* at = std::getenv("SOTC_RDOC_AT"); at != nullptr && VideoCore::IsRenderDocLoaded()) {
+        std::thread([list = std::string(at)] {
+            const auto start = std::chrono::steady_clock::now();
+            size_t pos = 0;
+            while (pos < list.size()) {
+                const size_t next = list.find(',', pos);
+                const int secs = std::atoi(list.substr(pos, next - pos).c_str());
+                std::this_thread::sleep_until(start + std::chrono::seconds(secs));
+                VideoCore::TriggerCapture();
+                if (next == std::string::npos) {
+                    break;
+                }
+                pos = next + 1;
+            }
+        }).detach();
+    }
 
     // Initialize patcher
     if (!id.empty()) {
