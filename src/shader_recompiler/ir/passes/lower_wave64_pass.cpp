@@ -110,6 +110,22 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
     const auto [size_x, size_y, size_z] = runtime_info.hw.cs.workgroup_size;
     const u32 num_threads = size_x * size_y * size_z;
     if (num_threads <= 32) {
+        // The whole workgroup fits in one host subgroup, but the guest code was written for a
+        // wave64 whose upper half is inactive. Reads of a fixed lane in that upper half (e.g. the
+        // "readlane 32" that merges the two halves of a cross-lane reduction) index past the host
+        // subgroup, which is undefined for OpGroupNonUniformBroadcast. Fold them into the lower
+        // half so they stay valid.
+        for (IR::Block* block : program.blocks) {
+            for (IR::Inst& inst : block->Instructions()) {
+                if (inst.GetOpcode() != IR::Opcode::ReadLane || !inst.Arg(1).IsImmediate()) {
+                    continue;
+                }
+                const u32 lane = inst.Arg(1).U32();
+                if (lane >= profile.subgroup_size) {
+                    inst.SetArg(1, IR::Value{lane % profile.subgroup_size});
+                }
+            }
+        }
         return;
     }
 
