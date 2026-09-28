@@ -183,6 +183,11 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     // Windows static guest red-zone protection
     const bool use_static_windows_guest_red_zone_protection =
         WindowsGuestRedZoneProtection::IsStaticPatchingEnabled();
+    // Short EXTRQ/INSERTQ must not trap on Windows (exception dispatch clobbers the red zone).
+    const bool patch_short_sse4a = !use_static_windows_guest_red_zone_protection &&
+                                   NeedsSse4aEmulation();
+    const bool need_function_starts =
+        use_static_windows_guest_red_zone_protection || patch_short_sse4a;
     std::vector<std::pair<VAddr, u64>> executable_segments;
     std::vector<uintptr_t> function_starts;
 #endif
@@ -212,7 +217,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
                 PrePatchInstructions(segment_addr, segment_file_size);
 #ifdef _WIN32
                 // Windows static guest red-zone protection
-                if (use_static_windows_guest_red_zone_protection) {
+                if (need_function_starts) {
                     executable_segments.emplace_back(segment_addr, segment_file_size);
                 }
 #endif
@@ -260,7 +265,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             if (Dwarf::DecodeEHHdr(eh_hdr_start, eh_hdr_end, hdr_info)) {
 #if defined(ARCH_X86_64) && defined(_WIN32)
                 // Windows static guest red-zone protection
-                if (use_static_windows_guest_red_zone_protection &&
+                if (need_function_starts &&
                     !Dwarf::DecodeEHHdrTable(hdr_info, eh_hdr_end, function_starts)) {
                     LOG_ERROR(Core_Linker, "Failed to decode EH frame search table for {}", name);
                 }
@@ -280,6 +285,15 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     }
 
 #if defined(ARCH_X86_64) && defined(_WIN32)
+    if (patch_short_sse4a) {
+        u64 patched{};
+        for (const auto& [segment_addr, segment_size] : executable_segments) {
+            patched += PatchShortSse4aInstructions(segment_addr, segment_size, function_starts);
+        }
+        if (patched != 0) {
+            LOG_INFO(Core_Linker, "Relocated {} short SSE4a instructions in {}", patched, name);
+        }
+    }
     // Windows static guest red-zone protection
     if (use_static_windows_guest_red_zone_protection) {
         u64 analyzed_function_count{};

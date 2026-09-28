@@ -59,4 +59,14 @@ void PrePatchInstructions(u64 segment_addr, u64 segment_size);
 RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_size,
                                                   std::span<const uintptr_t> function_starts);
 
+/// Returns true when the host CPU lacks SSE4a and EXTRQ/INSERTQ must be emulated.
+bool NeedsSse4aEmulation();
+
+/// Relocates 4-byte EXTRQ/INSERTQ (too short for a near jump) together with the following
+/// instructions into trampolines, so they never reach the illegal-instruction handler. On Windows
+/// exception dispatch writes below RSP and clobbers the guest red zone, which corrupts leaf
+/// functions that keep temporaries there. Returns the number of instructions patched.
+u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
+                                std::span<const uintptr_t> function_starts);
+
 } // namespace Core

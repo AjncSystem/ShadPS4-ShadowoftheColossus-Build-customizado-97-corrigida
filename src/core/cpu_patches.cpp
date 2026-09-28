@@ -2117,10 +2117,157 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
     return result;
 }
 
+bool NeedsSse4aEmulation() {
+    Cpu cpu;
+    return !cpu.has(Cpu::tSSE4a);
+}
+
+u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
+                                std::span<const uintptr_t> function_starts) {
+    auto* module = GetContainingModule(reinterpret_cast<void*>(segment_addr));
+    if (module == nullptr || function_starts.empty() || !NeedsSse4aEmulation()) {
+        return 0;
+    }
+
+    const uintptr_t segment_end = segment_addr + segment_size;
+    std::vector<uintptr_t> starts;
+    for (const uintptr_t start : function_starts) {
+        if (start >= segment_addr && start < segment_end) {
+            starts.push_back(start);
+        }
+    }
+    std::ranges::sort(starts);
+    starts.erase(std::ranges::unique(starts).begin(), starts.end());
+
+    // Register-form EXTRQ (66 0F 79 /r) and INSERTQ (F2 0F 79 /r) without REX are 4 bytes long.
+    const auto contains_short_sse4a = [](uintptr_t begin, uintptr_t end) {
+        const u8* bytes = reinterpret_cast<const u8*>(begin);
+        for (uintptr_t i = 0; i + 4 <= end - begin; ++i) {
+            if ((bytes[i] == 0x66 || bytes[i] == 0xF2) && bytes[i + 1] == 0x0F &&
+                bytes[i + 2] == 0x79 && (bytes[i + 3] & 0xC0) == 0xC0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto is_short_sse4a = [](const DecodedCodeInstruction& decoded) {
+        return decoded.instruction.length < NearJumpSize &&
+               (decoded.instruction.mnemonic == ZYDIS_MNEMONIC_EXTRQ ||
+                decoded.instruction.mnemonic == ZYDIS_MNEMONIC_INSERTQ);
+    };
+
+    u64 patched_count = 0;
+    std::unique_lock lock{module->mutex};
+    for (size_t index = 0; index < starts.size(); ++index) {
+        const uintptr_t function_start = starts[index];
+        const uintptr_t function_end = index + 1 < starts.size() ? starts[index + 1] : segment_end;
+        if (function_end <= function_start || !contains_short_sse4a(function_start, function_end)) {
+            continue;
+        }
+
+        const auto function =
+            DecodeFunction(function_start, function_end, segment_addr, segment_end);
+        uintptr_t covered_until = 0;
+        for (const auto& [site, site_decoded] : function.instructions) {
+            if (site < covered_until || !is_short_sse4a(site_decoded) ||
+                module->patched.contains(reinterpret_cast<u8*>(site))) {
+                continue;
+            }
+
+            // Collect the following instructions until the span can hold a near jump. No
+            // instruction after the first may be a branch target, and control flow may only end
+            // the span.
+            std::vector<const DecodedCodeInstruction*> span;
+            uintptr_t continuation = site;
+            bool valid = true;
+            const char* reason = "";
+            while (continuation - site < NearJumpSize) {
+                const auto it = function.instructions.find(continuation);
+                if (it == function.instructions.end()) {
+                    reason = "not decoded";
+                } else if (continuation != site &&
+                           function.branch_targets.contains(continuation)) {
+                    reason = "branch target inside span";
+                } else if (it->second.instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+                           IsControlFlowTerminator(it->second.instruction) ||
+                           it->second.instruction.meta.category == ZYDIS_CATEGORY_COND_BR) {
+                    reason = "control flow inside span";
+                } else if (module->patched.contains(reinterpret_cast<u8*>(continuation))) {
+                    reason = "already patched";
+                }
+                if (*reason != '\0') {
+                    valid = false;
+                    break;
+                }
+                span.push_back(&it->second);
+                continuation += it->second.instruction.length;
+            }
+            if (!valid) {
+                LOG_WARNING(Core, "Short SSE4a at {:#x} left to the trap handler: {}", site,
+                            reason);
+                continue;
+            }
+
+            auto& trampoline_gen = module->trampoline_gen;
+            const size_t trampoline_offset = trampoline_gen.getSize();
+            if (module->trampoline_exhausted) {
+                break;
+            }
+            const auto* trampoline = trampoline_gen.getCurr();
+            try {
+                for (const auto* decoded : span) {
+                    const PatchInfo* patch = FindMatchingPatch(*decoded);
+                    if (patch != nullptr && patch->trampoline) {
+                        // CPU patch generators preserve the guest red zone themselves.
+                        patch->generator(reinterpret_cast<void*>(decoded->address),
+                                         decoded->operands.data(), trampoline_gen);
+                    } else if (!EncodeRelocatedInstruction(*decoded, trampoline_gen)) {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (valid) {
+                    trampoline_gen.jmp(reinterpret_cast<void*>(continuation));
+                }
+            } catch (const Xbyak::Error& error) {
+                trampoline_gen.setSize(trampoline_offset);
+                if (HandleTrampolineError(module, error)) {
+                    break;
+                }
+                throw;
+            }
+            if (!valid) {
+                trampoline_gen.setSize(trampoline_offset);
+                continue;
+            }
+
+            auto& patch_gen = module->patch_gen;
+            patch_gen.reset();
+            patch_gen.setSize(site - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
+            patch_gen.jmp(trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR);
+            patch_gen.nop(continuation - site - NearJumpSize);
+            for (const auto* decoded : span) {
+                module->patched.insert(reinterpret_cast<u8*>(decoded->address));
+            }
+            covered_until = continuation;
+            ++patched_count;
+        }
+    }
+    return patched_count;
+}
+
 #else
 
 RedZonePatchResult PatchRedZoneMemoryInstructions(u64, u64, std::span<const uintptr_t>) {
     return {};
+}
+
+bool NeedsSse4aEmulation() {
+    return false;
+}
+
+u64 PatchShortSse4aInstructions(u64, u64, std::span<const uintptr_t>) {
+    return 0;
 }
 
 #endif
