@@ -220,6 +220,13 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     return (*slot_image_views)[view_id];
 }
 
+/// Two transfer writes (upload, copy, clear) to the same image must be ordered by a barrier even
+/// when the layout and access mask do not change, otherwise they form a write-after-write hazard.
+static bool IsTransferWriteAfterWrite(vk::AccessFlags2 prev_mask, vk::AccessFlags2 next_mask) {
+    constexpr vk::AccessFlags2 TransferWrite = vk::AccessFlagBits2::eTransferWrite;
+    return (prev_mask & TransferWrite) && (next_mask & TransferWrite);
+}
+
 void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                         vk::PipelineStageFlags2 dst_stage,
                         std::optional<SubresourceRange> subres_range) {
@@ -259,7 +266,8 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                 ASSERT(subres_idx < subresource_states.size());
                 auto& state = subresource_states[subres_idx];
 
-                if (state.layout != dst_layout || state.access_mask != dst_mask) {
+                if (state.layout != dst_layout || state.access_mask != dst_mask ||
+                    IsTransferWriteAfterWrite(state.access_mask, dst_mask)) {
                     barriers.emplace_back(vk::ImageMemoryBarrier2{
                         .srcStageMask = state.pl_stage,
                         .srcAccessMask = state.access_mask,
@@ -289,7 +297,8 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
             subresource_states.clear();
         }
     } else { // Full resource transition
-        if (last_state.layout == dst_layout && last_state.access_mask == dst_mask) {
+        if (last_state.layout == dst_layout && last_state.access_mask == dst_mask &&
+            !IsTransferWriteAfterWrite(last_state.access_mask, dst_mask)) {
             return;
         }
         barriers.emplace_back(vk::ImageMemoryBarrier2{
