@@ -1,25 +1,45 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <chrono>
+#include <atomic>
 #include <cstdlib>
+#include <atomic>
 #include <string>
+#include <atomic>
 #include "common/debug.h"
+#include <atomic>
 #include "core/debug_state.h"
+#include <atomic>
 #include "core/emulator_settings.h"
+#include <atomic>
 #include "core/memory.h"
+#include <atomic>
 #include "shader_recompiler/runtime_info.h"
+#include <atomic>
 #include "video_core/amdgpu/liverpool.h"
+#include <atomic>
 #include "video_core/buffer_cache/buffer.h"
+#include <atomic>
 #include "video_core/buffer_cache/buffer_cache.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include <atomic>
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
+#include <atomic>
 #include "video_core/texture_cache/image_view.h"
+#include <atomic>
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
@@ -62,7 +82,24 @@ Rasterizer::~Rasterizer() = default;
 // DEBUG (GPU hang hunting): SOTC_SYNC_DRAWS=<seconds> makes every draw/dispatch issued after
 // that many seconds log its shaders and parameters and then wait for the GPU to finish, so the
 // last "SOTCDRAW" line before a device loss identifies the offending command.
+extern std::atomic<u64> g_sotc_frame_number;
+
 static bool SyncDrawsActive() {
+    // SOTC_SYNC_FRAMES=a-b restricts syncing to presented game frames in [a, b]
+    static const std::pair<u64, u64> frames = [] {
+        const char* v = std::getenv("SOTC_SYNC_FRAMES");
+        if (!v) {
+            return std::make_pair(0ULL, ~0ULL);
+        }
+        char* end{};
+        const u64 a = std::strtoull(v, &end, 10);
+        const u64 b = (end && *end == '-') ? std::strtoull(end + 1, nullptr, 10) : ~0ULL;
+        return std::make_pair(a, b);
+    }();
+    const u64 frame = g_sotc_frame_number.load(std::memory_order_relaxed);
+    if (frame < frames.first || frame > frames.second) {
+        return false;
+    }
     static const s64 start_after = [] {
         const char* v = std::getenv("SOTC_SYNC_DRAWS");
         return v ? std::atoll(v) : -1LL;
@@ -91,6 +128,39 @@ void Rasterizer::SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a
     if (!kinds.empty() && kinds.find("," + std::string(kind) + ",") == std::string::npos) {
         return;
     }
+    // SOTC_SYNC_BUCKET=k/n syncs only commands whose first-stage shader hash % n == k
+    // (binary search over shaders). SOTC_SYNC_HASH=0x... syncs only that first-stage hash.
+    static const std::pair<u64, u64> bucket = [] {
+        const char* v = std::getenv("SOTC_SYNC_BUCKET");
+        u64 k = 0, n = 0;
+        if (v) {
+            char* end{};
+            k = std::strtoull(v, &end, 10);
+            if (end && *end == '/') {
+                n = std::strtoull(end + 1, nullptr, 10);
+            }
+        }
+        return std::make_pair(k, n);
+    }();
+    static const u64 only_hash = [] {
+        const char* v = std::getenv("SOTC_SYNC_HASH");
+        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+    }();
+    if (bucket.second != 0 || only_hash != 0) {
+        u64 first_hash = 0;
+        for (const auto* stage : pipeline->GetStages()) {
+            if (stage != nullptr) {
+                first_hash = stage->pgm_hash;
+                break;
+            }
+        }
+        if (bucket.second != 0 && (first_hash % bucket.second) != bucket.first) {
+            return;
+        }
+        if (only_hash != 0 && first_hash != only_hash) {
+            return;
+        }
+    }
     static const bool flush_only = [] {
         const char* v = std::getenv("SOTC_SYNC_MODE");
         return v && std::string(v) == "flush";
@@ -110,7 +180,7 @@ void Rasterizer::SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a
             hashes += fmt::format(" {}={:#x}", u32(stage->sw_stage), stage->pgm_hash);
         }
     }
-    LOG_WARNING(Render_Vulkan, "SOTCDRAW #{} {} a={} b={} c={} shaders:{}", counter++, kind, a, b,
+    LOG_CRITICAL(Render_Vulkan, "SOTCDRAW #{} {} a={} b={} c={} shaders:{}", counter++, kind, a, b,
                 c, hashes);
     scheduler.Finish();
 }
@@ -418,6 +488,14 @@ void Rasterizer::DispatchDirect() {
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
+        return;
+    }
+    // DEBUG: SOTC_SKIP_HASH=0x... skips dispatches of that compute shader
+    static const u64 skip_hash = [] {
+        const char* v = std::getenv("SOTC_SKIP_HASH");
+        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+    }();
+    if (skip_hash != 0 && cs.pgm_hash == skip_hash) {
         return;
     }
 
@@ -829,6 +907,50 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
 void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data) {
     const u64 alignment = instance.StorageMinAlignment();
+    // DEBUG: SOTC_DUMP_HASH=0x... logs the buffers bound to that shader and their first dwords
+    static const u64 dump_hash = [] {
+        const char* v = std::getenv("SOTC_DUMP_HASH");
+        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+    }();
+    static const u64 dump_from_frame = [] {
+        const char* v = std::getenv("SOTC_DUMP_FROM_FRAME");
+        return v ? std::strtoull(v, nullptr, 10) : 0ULL;
+    }();
+    if (dump_hash != 0 && stage.pgm_hash == dump_hash &&
+        g_sotc_frame_number.load(std::memory_order_relaxed) >= dump_from_frame) {
+        static u32 dumps = 0;
+        if (dumps++ < 20000) {
+            if (stage.hw_stage == Shader::HwStage::Compute) {
+                const auto& cs = liverpool->GetCsRegs();
+                LOG_CRITICAL(Render_Vulkan,
+                             "SOTCBUF #{} cs threads={}x{}x{} groups={}x{}x{} subgroup_host={}",
+                             dumps, cs.num_thread_x.full, cs.num_thread_y.full,
+                             cs.num_thread_z.full, cs.dim_x, cs.dim_y, cs.dim_z,
+                             instance.SubgroupSize());
+            }
+            u32 idx = 0;
+            for (const auto& desc : stage.buffers) {
+                if (desc.IsSpecial()) {
+                    LOG_CRITICAL(Render_Vulkan, "SOTCBUF #{} b{} special type={}", dumps, idx++,
+                                 u32(desc.buffer_type));
+                    continue;
+                }
+                const auto vs = desc.GetSharp(stage);
+                std::string head;
+                if (vs.base_address != 0 && memory->IsValidMapping(vs.base_address, 32)) {
+                    const u32* p = reinterpret_cast<const u32*>(vs.base_address);
+                    for (int i = 0; i < 8; ++i) {
+                        head += fmt::format(" {:08x}", p[i]);
+                    }
+                }
+                LOG_CRITICAL(Render_Vulkan,
+                             "SOTCBUF #{} b{} addr={:#x} size={} stride={} written={} fmt={} "
+                             "data:{}",
+                             dumps, idx++, u64(vs.base_address), vs.GetSize(), vs.GetStride(),
+                             desc.is_written, desc.is_formatted, head);
+            }
+        }
+    }
     for (const auto& desc : stage.buffers) {
         if (desc.IsSpecial()) {
             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {

@@ -840,6 +840,8 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     return frame;
 }
 
+std::atomic<u64> g_sotc_frame_number{0}; // DEBUG: presented game frame counter
+
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
     // Free the frame for reuse
     const auto free_frame = [&] {
@@ -1083,6 +1085,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     free_frame();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
+        // DEBUG: SOTC_FRAME_LOG=<n> logs the game frame number every n frames
+        static const u64 every = [] {
+            const char* v = std::getenv("SOTC_FRAME_LOG");
+            return v ? std::strtoull(v, nullptr, 10) : 0ULL;
+        }();
+        static u64 frames = 0;
+        static const auto t0 = std::chrono::steady_clock::now();
+        ++frames;
+        g_sotc_frame_number.store(frames, std::memory_order_relaxed);
+        if (every != 0 && frames % every == 0) {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0)
+                                .count();
+            LOG_CRITICAL(Render_Vulkan, "SOTCFRAME {} t={}ms", frames, ms);
+        }
     }
 }
 
