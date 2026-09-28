@@ -117,6 +117,7 @@ private:
     void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
 
     bool FilterDraw();
+    void SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a, u64 b, u64 c);
 
     void BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                      Shader::PushData& push_data);
@@ -162,6 +163,9 @@ private:
         bool is_written;
     };
     boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
+    /// Vertex/index buffers read by fixed-function stages of the current draw. They are recorded
+    /// as reads after the draw so later writes to the same ranges wait for it.
+    std::vector<BoundBuffer> fixed_function_reads;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;

@@ -20,6 +20,12 @@
 
 namespace AmdGpu {
 
+// DEBUG: SOTC_FENCE_FINISH makes fence-signaling packets wait for the GPU first.
+static bool FenceFinishEnabled() {
+    static const bool v = std::getenv("SOTC_FENCE_FINISH") != nullptr;
+    return v;
+}
+
 static const char* dcb_task_name{"DCB_TASK"};
 static const char* ccb_task_name{"CCB_TASK"};
 
@@ -664,6 +670,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
                 if (rasterizer) {
                     rasterizer->OnFence();
+                    if (FenceFinishEnabled()) {
+                        rasterizer->Finish();
+                    }
                 }
                 event_eos->SignalFence([](void* address, u64 data, u32 num_bytes) {
                     auto* memory = Core::Memory::Instance();
@@ -683,6 +692,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 if (rasterizer) {
                     rasterizer->OnFence();
+                    if (FenceFinishEnabled()) {
+                        rasterizer->Finish();
+                    }
                 }
                 event_eop->SignalFence(
                     [](void* address, u64 data, u32 num_bytes) {
@@ -737,6 +749,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (!write_data->wr_one_addr.Value()) {
                     if (rasterizer) {
                         rasterizer->OnFence();
+                        // DEBUG: SOTC_WD_FINISH waits for the GPU before the CPU-side write
+                        static const bool wd_finish = std::getenv("SOTC_WD_FINISH") != nullptr;
+                        if (wd_finish) {
+                            rasterizer->Finish();
+                        }
                     }
                     std::memcpy(address, write_data->data, data_size);
                 } else {
@@ -1108,6 +1125,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(header);
             if (rasterizer) {
                 rasterizer->OnFence();
+                if (FenceFinishEnabled()) {
+                    rasterizer->Finish();
+                }
             }
             release_mem->SignalFence(
                 [pipe_id = queue.pipe_id] {

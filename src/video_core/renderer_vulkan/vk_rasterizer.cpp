@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
+#include <string>
 #include "common/debug.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -55,6 +58,62 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
 }
 
 Rasterizer::~Rasterizer() = default;
+
+// DEBUG (GPU hang hunting): SOTC_SYNC_DRAWS=<seconds> makes every draw/dispatch issued after
+// that many seconds log its shaders and parameters and then wait for the GPU to finish, so the
+// last "SOTCDRAW" line before a device loss identifies the offending command.
+static bool SyncDrawsActive() {
+    static const s64 start_after = [] {
+        const char* v = std::getenv("SOTC_SYNC_DRAWS");
+        return v ? std::atoll(v) : -1LL;
+    }();
+    if (start_after < 0) {
+        return false;
+    }
+    static const auto t0 = std::chrono::steady_clock::now();
+    return std::chrono::steady_clock::now() - t0 >= std::chrono::seconds(start_after);
+}
+
+void Rasterizer::SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a, u64 b, u64 c) {
+    if (!SyncDrawsActive()) {
+        return;
+    }
+    // SOTC_SYNC_KINDS=Draw,DrawIndexed,DrawIndirect,Dispatch,DispatchIndirect limits which commands
+    // are synchronized; SOTC_SYNC_LOG=0 disables the per-command log line.
+    static const std::string kinds = [] {
+        const char* v = std::getenv("SOTC_SYNC_KINDS");
+        return v ? "," + std::string(v) + "," : std::string{};
+    }();
+    static const bool do_log = [] {
+        const char* v = std::getenv("SOTC_SYNC_LOG");
+        return !(v && v[0] == '0');
+    }();
+    if (!kinds.empty() && kinds.find("," + std::string(kind) + ",") == std::string::npos) {
+        return;
+    }
+    static const bool flush_only = [] {
+        const char* v = std::getenv("SOTC_SYNC_MODE");
+        return v && std::string(v) == "flush";
+    }();
+    if (!do_log) {
+        if (flush_only) {
+            scheduler.Flush();
+        } else {
+            scheduler.Finish();
+        }
+        return;
+    }
+    static u64 counter = 0;
+    std::string hashes;
+    for (const auto* stage : pipeline->GetStages()) {
+        if (stage != nullptr) {
+            hashes += fmt::format(" {}={:#x}", u32(stage->sw_stage), stage->pgm_hash);
+        }
+    }
+    LOG_WARNING(Render_Vulkan, "SOTCDRAW #{} {} a={} b={} c={} shaders:{}", counter++, kind, a, b,
+                c, hashes);
+    scheduler.Finish();
+}
 
 bool Rasterizer::FilterDraw() {
     const auto& regs = liverpool->regs;
@@ -230,6 +289,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                     instance_offset);
     }
     DebugState.IncDrawCall();
+    SyncDrawDebug(pipeline, is_indexed ? "DrawIndexed" : "Draw", regs.num_indices, regs.num_instances.NumInstances(), 0);
 
     ResetBindings(false);
 }
@@ -265,6 +325,27 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         BindIndexBuffer();
     }
 
+    {
+        // DEBUG: report indirect draws whose (CPU-visible) arguments request huge amounts of work
+        static const bool check_args = std::getenv("SOTC_CHECK_ARGS") != nullptr;
+        if (check_args && count_address == 0) {
+            const u32* args = reinterpret_cast<const u32*>(arg_address + offset);
+            for (u32 i = 0; i < max_count; ++i, args += stride / 4) {
+                const u64 elems = args[0];
+                const u64 insts = args[1];
+                if (elems * insts > 20'000'000ULL || elems > 20'000'000ULL) {
+                    static u32 reported = 0;
+                    if (reported++ < 200) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "SOTCARGS huge {} draw: count={} instances={} first={} "
+                                    "vtxoff={} firstinst={} addr={:#x}",
+                                    is_indexed ? "indexed" : "plain", args[0], args[1], args[2],
+                                    args[3], is_indexed ? args[4] : 0, arg_address + offset);
+                    }
+                }
+            }
+        }
+    }
     const auto [buffer, base] =
         buffer_cache.ObtainBuffer(arg_address + offset, stride * max_count, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, stride * max_count);
@@ -308,6 +389,18 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         }
         DebugState.IncDrawCall();
     }
+    SyncDrawDebug(pipeline, "DrawIndirect", max_count, count_address, is_indexed);
+
+    // Record the indirect argument reads so a later write to the same range (e.g. a WRITE_DATA
+    // packet uploading the next draw's arguments) waits for this draw instead of racing it.
+    runtime.AccessBuffer(buffer, base, stride * max_count,
+                         vk::PipelineStageFlagBits2::eDrawIndirect,
+                         vk::AccessFlagBits2::eIndirectCommandRead);
+    if (count_address != 0) {
+        runtime.AccessBuffer(count_buffer, count_offset, 4,
+                             vk::PipelineStageFlagBits2::eDrawIndirect,
+                             vk::AccessFlagBits2::eIndirectCommandRead);
+    }
 
     ResetBindings(false);
 }
@@ -343,6 +436,7 @@ void Rasterizer::DispatchDirect() {
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
+    SyncDrawDebug(pipeline, "Dispatch", cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
 
     ResetBindings(true);
 }
@@ -376,6 +470,9 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatchIndirect(buffer->Handle(), base);
     DebugState.IncDispatch();
+    SyncDrawDebug(pipeline, "DispatchIndirect", address, offset, size);
+    runtime.AccessBuffer(buffer, base, size, vk::PipelineStageFlagBits2::eDrawIndirect,
+                         vk::AccessFlagBits2::eIndirectCommandRead);
 
     ResetBindings(true);
 }
@@ -500,6 +597,7 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
         std::tie(range.buffer, range.offset) =
             buffer_cache.ObtainBuffer(range.base_address, size, false);
         needs_barrier |= runtime.IsBufferAccessed(range.buffer, range.offset, size);
+        fixed_function_reads.push_back({range.buffer, range.offset, static_cast<u32>(size), false});
     }
 
     // Bind vertex buffers
@@ -551,6 +649,7 @@ void Rasterizer::BindIndexBuffer(u32 index_offset) {
     const auto [buffer, offset] =
         buffer_cache.ObtainBuffer(index_address, index_buffer_size, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, offset, index_buffer_size);
+    fixed_function_reads.push_back({buffer, offset, index_buffer_size, false});
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindIndexBuffer(buffer->Handle(), offset, index_type);
 }
@@ -567,6 +666,13 @@ void Rasterizer::ResetBindings(bool is_compute) {
         runtime.AccessBuffer(buffer, offset, size, dst_stage,
                              vk::AccessFlagBits2::eShaderRead | write_flag);
     }
+    for (const auto& read : fixed_function_reads) {
+        runtime.AccessBuffer(read.buffer, read.offset, read.size,
+                             vk::PipelineStageFlagBits2::eVertexInput,
+                             vk::AccessFlagBits2::eVertexAttributeRead |
+                                 vk::AccessFlagBits2::eIndexRead);
+    }
+    fixed_function_reads.clear();
     bound_images.clear();
     bound_buffers.clear();
     needs_barrier = false;
