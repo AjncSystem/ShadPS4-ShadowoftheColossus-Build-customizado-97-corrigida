@@ -62,7 +62,16 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
-    while (instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT) != vk::Result::eSuccess) {
+    for (;;) {
+        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
+        if (result == vk::Result::eSuccess) {
+            break;
+        }
+        if (result == vk::Result::eErrorDeviceLost) {
+            // Spinning here would freeze the emulator forever after a GPU hang/reset.
+            instance.ReportDeviceFault();
+            UNREACHABLE_MSG("Device lost while waiting for GPU tick {}", tick);
+        }
     }
     Refresh();
 }
