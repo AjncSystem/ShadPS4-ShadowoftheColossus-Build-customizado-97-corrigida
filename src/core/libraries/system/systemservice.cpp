@@ -1878,7 +1878,7 @@ int PS4_SYSV_ABI sceSystemServiceLoadExec(const char* path, const char* argv[]) 
     auto mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
     // Validate through the mount stack so archive-backed targets resolve.
     if (!mnt->Exists(std::string_view(path))) {
-        LOG_INFO(Lib_SystemService, "Restart called with invalid file '{}', exiting.", path);
+        LOG_CRITICAL(Lib_SystemService, "Restart called with invalid file '{}', exiting.", path);
         std::quick_exit(0);
     }
     std::filesystem::path exec_path;

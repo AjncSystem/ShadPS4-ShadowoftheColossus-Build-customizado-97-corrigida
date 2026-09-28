@@ -252,6 +252,7 @@ void WindowSDL::WaitEvent() {
         OnGamepadEvent(&event);
         break;
     case SDL_EVENT_QUIT:
+        LOG_CRITICAL(Frontend, "SOTCEXIT window received SDL_EVENT_QUIT");
         is_open = false;
         break;
     case SDL_EVENT_QUIT_DIALOG:

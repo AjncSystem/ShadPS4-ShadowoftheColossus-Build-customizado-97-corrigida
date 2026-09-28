@@ -82,6 +82,7 @@ Emulator::Emulator() {
     WSAStartup(versionWanted, &wsaData);
 #endif
     std::at_quick_exit([]() { Common::Singleton<Core::Emulator>::Instance()->Shutdown(); });
+    std::at_quick_exit([] { LOG_CRITICAL(Core, "SOTCEXIT quick_exit called"); });
 }
 
 Emulator::~Emulator() {}
