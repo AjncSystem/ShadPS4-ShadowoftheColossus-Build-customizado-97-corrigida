@@ -56,8 +56,10 @@ void PrePatchInstructions(u64 segment_addr, u64 segment_size);
 
 // Windows static guest red-zone protection
 /// Keeps Windows exception dispatch outside live guest red zones at faultable memory accesses.
+/// When selected_addresses is not empty only functions containing one of them are patched.
 RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_size,
-                                                  std::span<const uintptr_t> function_starts);
+                                                  std::span<const uintptr_t> function_starts,
+                                                  std::span<const uintptr_t> selected_addresses = {});
 
 /// Returns true when the host CPU lacks SSE4a and EXTRQ/INSERTQ must be emulated.
 bool NeedsSse4aEmulation();

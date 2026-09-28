@@ -1597,7 +1597,8 @@ const PatchInfo* FindMatchingPatch(const DecodedCodeInstruction& decoded) {
 } // namespace
 
 RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_size,
-                                                  std::span<const uintptr_t> function_starts) {
+                                                  std::span<const uintptr_t> function_starts,
+                                                  std::span<const uintptr_t> selected_addresses) {
     RedZonePatchResult result{};
     auto* module = GetContainingModule(reinterpret_cast<void*>(segment_addr));
     if (module == nullptr || function_starts.empty()) {
@@ -1622,6 +1623,13 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
         const uintptr_t function_end =
             function_index + 1 < starts.size() ? starts[function_index + 1] : segment_end;
         if (function_end <= function_start) {
+            continue;
+        }
+        // Selective mode: only protect functions containing one of the requested addresses.
+        if (!selected_addresses.empty() &&
+            std::ranges::none_of(selected_addresses, [&](uintptr_t addr) {
+                return addr >= function_start && addr < function_end;
+            })) {
             continue;
         }
 
@@ -2258,7 +2266,8 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
 
 #else
 
-RedZonePatchResult PatchRedZoneMemoryInstructions(u64, u64, std::span<const uintptr_t>) {
+RedZonePatchResult PatchRedZoneMemoryInstructions(u64, u64, std::span<const uintptr_t>,
+                                                  std::span<const uintptr_t>) {
     return {};
 }
 

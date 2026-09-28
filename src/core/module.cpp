@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <fmt/format.h>
 #include "common/alignment.h"
 #include "common/arch.h"
@@ -186,8 +187,29 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     // Short EXTRQ/INSERTQ must not trap on Windows (exception dispatch clobbers the red zone).
     const bool patch_short_sse4a = !use_static_windows_guest_red_zone_protection &&
                                    NeedsSse4aEmulation();
-    const bool need_function_starts =
-        use_static_windows_guest_red_zone_protection || patch_short_sse4a;
+    // Selective red-zone protection: SHADPS4_REDZONE_PROTECT="0xOFF,module.sprx@0xOFF,..."
+    // lists module-relative addresses whose functions get the static red-zone patch, for
+    // games where a fault inside a known red-zone function corrupts guest state.
+    std::vector<uintptr_t> red_zone_selected;
+    if (!use_static_windows_guest_red_zone_protection) {
+        if (const char* list = std::getenv("SHADPS4_REDZONE_PROTECT")) {
+            for (const auto& entry : Common::SplitString(list, ',')) {
+                std::string_view item = entry;
+                std::string_view module_name = "eboot.bin";
+                if (const auto at = item.find('@'); at != std::string_view::npos) {
+                    module_name = item.substr(0, at);
+                    item = item.substr(at + 1);
+                }
+                if (module_name != name || item.empty()) {
+                    continue;
+                }
+                red_zone_selected.push_back(base_virtual_addr +
+                                            std::stoull(std::string{item}, nullptr, 16));
+            }
+        }
+    }
+    const bool need_function_starts = use_static_windows_guest_red_zone_protection ||
+                                      patch_short_sse4a || !red_zone_selected.empty();
     std::vector<std::pair<VAddr, u64>> executable_segments;
     std::vector<uintptr_t> function_starts;
 #endif
@@ -293,6 +315,21 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
         if (patched != 0) {
             LOG_INFO(Core_Linker, "Relocated {} short SSE4a instructions in {}", patched, name);
         }
+    }
+    if (!red_zone_selected.empty()) {
+        RedZonePatchResult total{};
+        for (const auto& [segment_addr, segment_size] : executable_segments) {
+            const auto result = PatchRedZoneMemoryInstructions(segment_addr, segment_size,
+                                                               function_starts, red_zone_selected);
+            total.function_count += result.function_count;
+            total.patched_memory_instruction_count += result.patched_memory_instruction_count;
+            total.memory_instruction_count += result.memory_instruction_count;
+        }
+        LOG_INFO(Core_Linker,
+                 "Selective red-zone protection for {}: {} functions, {}/{} memory instructions "
+                 "patched",
+                 name, total.function_count, total.patched_memory_instruction_count,
+                 total.memory_instruction_count);
     }
     // Windows static guest red-zone protection
     if (use_static_windows_guest_red_zone_protection) {
