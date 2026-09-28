@@ -62,10 +62,23 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
+    bool reported_slow = false;
     for (;;) {
-        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
+        // Wake up every 5s so a stuck wait can be diagnosed instead of blocking silently.
+        constexpr u64 SlowWaitNs = 5'000'000'000ULL;
+        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, SlowWaitNs);
         if (result == vk::Result::eSuccess) {
             break;
+        }
+        if (result == vk::Result::eTimeout) {
+            if (!std::exchange(reported_slow, true)) {
+                const auto [res, counter] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+                LOG_ERROR(Render_Vulkan,
+                          "GPU wait is taking long: waiting for tick {}, semaphore at {} ({}), "
+                          "cpu tick {}",
+                          tick, counter, vk::to_string(res), CurrentTick());
+            }
+            continue;
         }
         if (result == vk::Result::eErrorDeviceLost) {
             // Spinning here would freeze the emulator forever after a GPU hang/reset.
