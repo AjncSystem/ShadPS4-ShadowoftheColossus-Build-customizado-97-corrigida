@@ -2,44 +2,84 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include <array>
+#include <memory>
 #include <chrono>
 #include <atomic>
+#include <array>
+#include <memory>
 #include <cstdlib>
 #include <atomic>
+#include <array>
+#include <memory>
 #include <string>
 #include <atomic>
+#include <array>
+#include <memory>
 #include "common/debug.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "core/debug_state.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "core/emulator_settings.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "core/memory.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "shader_recompiler/runtime_info.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/amdgpu/liverpool.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/buffer_cache/buffer.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/buffer_cache/buffer_cache.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/texture_cache/image_view.h"
 #include <atomic>
+#include <array>
+#include <memory>
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
@@ -84,6 +124,36 @@ Rasterizer::~Rasterizer() = default;
 // last "SOTCDRAW" line before a device loss identifies the offending command.
 extern std::atomic<u64> g_sotc_frame_number;
 
+// DEBUG: GPU-side capture of the first bound buffer of one compute shader (SOTC_CAPTURE_HASH).
+// Right before each dispatch the GPU copies 64 bytes of buffer 0 into a host-visible ring, so
+// the values the shader really consumed can be printed after a device loss.
+namespace {
+constexpr u32 SotcCaptureSlots = 64;
+constexpr u32 SotcCaptureBytes = 64;
+std::unique_ptr<VideoCore::Buffer> sotc_capture_buffer;
+std::array<std::pair<u64, u64>, SotcCaptureSlots> sotc_capture_meta{}; // (sequence, frame)
+u64 sotc_capture_seq = 0;
+} // namespace
+
+void DumpSotcCaptures() {
+    if (!sotc_capture_buffer) {
+        return;
+    }
+    sotc_capture_buffer->Invalidate(0, SotcCaptureSlots * SotcCaptureBytes);
+    const u64 first = sotc_capture_seq > SotcCaptureSlots ? sotc_capture_seq - SotcCaptureSlots : 0;
+    for (u64 seq = first; seq < sotc_capture_seq; ++seq) {
+        const u32 slot = static_cast<u32>(seq % SotcCaptureSlots);
+        const u32* d = reinterpret_cast<const u32*>(sotc_capture_buffer->mapped_data.data() +
+                                                    slot * SotcCaptureBytes);
+        std::string words;
+        for (u32 i = 0; i < 12; ++i) {
+            words += fmt::format(" {:08x}", d[i]);
+        }
+        LOG_CRITICAL(Render_Vulkan, "  capture seq={} frame={} b0:{}", sotc_capture_meta[slot].first,
+                     sotc_capture_meta[slot].second, words);
+    }
+}
+
 static bool SyncDrawsActive() {
     // SOTC_SYNC_FRAMES=a-b restricts syncing to presented game frames in [a, b]
     static const std::pair<u64, u64> frames = [] {
@@ -112,6 +182,19 @@ static bool SyncDrawsActive() {
 }
 
 void Rasterizer::SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a, u64 b, u64 c) {
+    if (instance.IsNvCheckpointsEnabled()) {
+        // Tag every command so a device loss can be traced back to it.
+        static std::atomic<u64> marker{0};
+        const u64 m = ++marker;
+        std::string hashes;
+        for (const auto* stage : pipeline->GetStages()) {
+            if (stage != nullptr) {
+                hashes += fmt::format(" {}={:#x}", u32(stage->sw_stage), stage->pgm_hash);
+            }
+        }
+        instance.DescribeCheckpoint(m, fmt::format("{} a={} b={} c={}{}", kind, a, b, c, hashes));
+        instance.SetCheckpoint(scheduler.CommandBuffer(), m);
+    }
     if (!SyncDrawsActive()) {
         return;
     }
@@ -511,6 +594,45 @@ void Rasterizer::DispatchDirect() {
     pipeline->BindResources(set_writes, push_data);
 
     const auto cmdbuf = scheduler.CommandBuffer();
+    static const u64 capture_hash = [] {
+        const char* v = std::getenv("SOTC_CAPTURE_HASH");
+        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+    }();
+    if (capture_hash != 0 && cs.pgm_hash == capture_hash && !cs.buffers.empty() &&
+        !cs.buffers[0].IsSpecial()) {
+        if (!sotc_capture_buffer) {
+            sotc_capture_buffer = std::make_unique<VideoCore::Buffer>(
+                instance, 0, SotcCaptureSlots * SotcCaptureBytes, VideoCore::MemoryType::HostCached,
+                "SotcCapture");
+        }
+        const auto sharp = cs.buffers[0].GetSharp(cs);
+        const u64 size = std::min<u64>(sharp.GetSize(), SotcCaptureBytes);
+        if (sharp.base_address != 0 && size != 0) {
+            const auto [src, src_offset] = buffer_cache.ObtainBuffer(sharp.base_address, size, false);
+            const u32 slot = static_cast<u32>(sotc_capture_seq % SotcCaptureSlots);
+            sotc_capture_meta[slot] = {sotc_capture_seq,
+                                       g_sotc_frame_number.load(std::memory_order_relaxed)};
+            ++sotc_capture_seq;
+            const vk::MemoryBarrier2 before{
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1,
+                                                       .pMemoryBarriers = &before});
+            cmdbuf.copyBuffer(src->Handle(), sotc_capture_buffer->Handle(),
+                              vk::BufferCopy{src_offset, slot * SotcCaptureBytes, size});
+            const vk::MemoryBarrier2 after{
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask = vk::AccessFlagBits2::eMemoryRead,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1,
+                                                       .pMemoryBarriers = &after});
+        }
+    }
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
@@ -908,10 +1030,19 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                              Shader::PushData& push_data) {
     const u64 alignment = instance.StorageMinAlignment();
     // DEBUG: SOTC_DUMP_HASH=0x... logs the buffers bound to that shader and their first dwords
-    static const u64 dump_hash = [] {
+    // SOTC_DUMP_HASH may list several hashes separated by commas
+    static const std::vector<u64> dump_hashes = [] {
+        std::vector<u64> out;
         const char* v = std::getenv("SOTC_DUMP_HASH");
-        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        while (v && *v) {
+            char* end{};
+            out.push_back(std::strtoull(v, &end, 16));
+            v = (end && *end == ',') ? end + 1 : nullptr;
+        }
+        return out;
     }();
+    const u64 dump_hash =
+        std::ranges::contains(dump_hashes, stage.pgm_hash) ? stage.pgm_hash : 0ULL;
     static const u64 dump_from_frame = [] {
         const char* v = std::getenv("SOTC_DUMP_FROM_FRAME");
         return v ? std::strtoull(v, nullptr, 10) : 0ULL;
@@ -936,6 +1067,16 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     continue;
                 }
                 const auto vs = desc.GetSharp(stage);
+                if (vs.base_address != 0 && vs.GetSize() != 0 &&
+                    buffer_cache.IsRegionGpuModified(vs.base_address, vs.GetSize())) {
+                    std::string cpu_view;
+                    const u32* p = reinterpret_cast<const u32*>(vs.base_address);
+                    for (int i = 0; i < 8; ++i) {
+                        cpu_view += fmt::format(" {:08x}", p[i]);
+                    }
+                    LOG_CRITICAL(Render_Vulkan, "SOTCBUF #{} b{} GPU-modified, cpu view was:{}",
+                                 dumps, idx, cpu_view);
+                }
                 std::string head;
                 if (vs.base_address != 0 && memory->IsValidMapping(vs.base_address, 32)) {
                     const u32* p = reinterpret_cast<const u32*>(vs.base_address);
@@ -944,9 +1085,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     }
                 }
                 LOG_CRITICAL(Render_Vulkan,
-                             "SOTCBUF #{} b{} addr={:#x} size={} stride={} written={} fmt={} "
+                             "SOTCBUF #{} sh={:#x} b{} addr={:#x} size={} stride={} written={} fmt={} "
                              "data:{}",
-                             dumps, idx++, u64(vs.base_address), vs.GetSize(), vs.GetStride(),
+                             dumps, stage.pgm_hash, idx++, u64(vs.base_address), vs.GetSize(),
+                             vs.GetStride(),
                              desc.is_written, desc.is_formatted, head);
             }
         }
