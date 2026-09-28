@@ -6,6 +6,7 @@
 #include "common/alignment.h"
 #include "common/arch.h"
 #include "common/assert.h"
+#include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/memory_patcher.h"
 #include "common/sha1.h"
@@ -187,11 +188,27 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     // Short EXTRQ/INSERTQ must not trap on Windows (exception dispatch clobbers the red zone).
     const bool patch_short_sse4a = !use_static_windows_guest_red_zone_protection &&
                                    NeedsSse4aEmulation();
-    // Selective red-zone protection: SHADPS4_REDZONE_PROTECT="0xOFF,module.sprx@0xOFF,..."
-    // lists module-relative addresses whose functions get the static red-zone patch, for
-    // games where a fault inside a known red-zone function corrupts guest state.
+    // Selective red-zone protection: functions known to keep live data in the red zone while
+    // touching memory that can fault (e.g. precise buffer readbacks) get the static red-zone
+    // patch. SHADPS4_REDZONE_PROTECT="0xOFF,module.sprx@0xOFF,..." adds module-relative
+    // addresses for other games.
+    struct KnownRedZoneFunction {
+        std::string_view serial;
+        std::string_view module;
+        u64 offset;
+    };
+    static constexpr KnownRedZoneFunction KnownRedZoneFunctions[] = {
+        // Shadow of the Colossus (EU 1.01): keeps pointers at [rsp-0x8..-0x18] across a loop.
+        {"CUSA08809", "eboot.bin", 0xEDFB30},
+    };
     std::vector<uintptr_t> red_zone_selected;
     if (!use_static_windows_guest_red_zone_protection) {
+        const auto serial = Common::ElfInfo::Instance().GameSerial();
+        for (const auto& known : KnownRedZoneFunctions) {
+            if (known.serial == serial && known.module == name) {
+                red_zone_selected.push_back(base_virtual_addr + known.offset);
+            }
+        }
         if (const char* list = std::getenv("SHADPS4_REDZONE_PROTECT")) {
             for (const auto& entry : Common::SplitString(list, ',')) {
                 std::string_view item = entry;
