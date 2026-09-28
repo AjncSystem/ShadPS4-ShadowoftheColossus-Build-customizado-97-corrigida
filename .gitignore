@@ -421,3 +421,6 @@ cmake-build-*
 
 # Nix Result symlink
 result
+
+# Local launcher + user data (saves, configs, shader cache) used for testing
+/shadPS4QtLauncher/
