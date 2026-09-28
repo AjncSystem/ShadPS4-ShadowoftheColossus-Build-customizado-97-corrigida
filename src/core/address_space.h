@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <boost/icl/separate_interval_set.hpp>
 #include "common/arch.h"
@@ -100,12 +101,20 @@ public:
     /// Protects requested region.
     void Protect(VAddr virtual_addr, u64 size, MemoryPermission perms);
 
+    /// Called with ranges whose host mapping had to be recreated with the default protection
+    /// (Windows placeholder splits), so page protections applied by other systems can be restored.
+    using RemapCallback = std::function<void(VAddr, u64)>;
+    void SetRemapCallback(RemapCallback callback);
+
     // Returns an interval set containing all usable regions.
     boost::icl::interval_set<VAddr> GetUsableRegions();
 
 private:
+    void NotifyRemapped();
+
     struct Impl;
     std::unique_ptr<Impl> impl;
+    RemapCallback remap_callback;
     u8* backing_base{};
     u8* system_managed_base{};
     u64 system_managed_size{};

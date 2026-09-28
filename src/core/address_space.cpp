@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <map>
+#include <utility>
+#include <vector>
 #include <fmt/format.h>
 #include "common/alignment.h"
 #include "common/arch.h"
@@ -349,6 +351,7 @@ struct AddressSpace::Impl {
             // If the mapping was mapped, remap the region.
             if (region.is_mapped) {
                 MapRegion(&region);
+                remapped_ranges.emplace_back(region.base, region.size);
             }
 
             // Store a new region matching the removed area.
@@ -387,7 +390,9 @@ struct AddressSpace::Impl {
 
             // If these regions were mapped, then map the unmapped area beyond the requested range.
             if (region.is_mapped) {
+                const auto& next_region = std::next(it)->second;
                 MapRegion(&std::next(it)->second);
+                remapped_ranges.emplace_back(next_region.base, next_region.size);
             }
         }
 
@@ -567,6 +572,11 @@ struct AddressSpace::Impl {
         }
     }
 
+    std::vector<std::pair<VAddr, u64>> TakeRemappedRanges() {
+        std::scoped_lock lk{mutex};
+        return std::exchange(remapped_ranges, {});
+    }
+
     boost::icl::interval_set<VAddr> GetUsableRegions() {
         boost::icl::interval_set<VAddr> reserved_regions;
         for (auto region : regions) {
@@ -587,6 +597,8 @@ struct AddressSpace::Impl {
     u8* user_base{};
     u64 user_size{};
     std::map<VAddr, MemoryRegion> regions;
+    // Mapped neighbours that SplitRegion recreated with their original protection.
+    std::vector<std::pair<VAddr, u64>> remapped_ranges;
 };
 #else
 
@@ -843,13 +855,17 @@ void* AddressSpace::Map(VAddr virtual_addr, u64 size, PAddr phys_addr, bool is_e
     // canonical copy of the memory and rely on the JIT to map translated code as executable.
     constexpr auto prot = PAGE_READWRITE;
 #endif
-    return impl->Map(virtual_addr, phys_addr, size, prot);
+    void* const ptr = impl->Map(virtual_addr, phys_addr, size, prot);
+    NotifyRemapped();
+    return ptr;
 }
 
 void* AddressSpace::MapFile(VAddr virtual_addr, u64 size, u64 offset, u32 prot, uintptr_t fd) {
 #ifdef _WIN32
-    return impl->Map(virtual_addr, offset, size,
-                     ToWindowsProt(std::bit_cast<Core::MemoryProt>(prot)), fd);
+    void* const ptr = impl->Map(virtual_addr, offset, size,
+                                ToWindowsProt(std::bit_cast<Core::MemoryProt>(prot)), fd);
+    NotifyRemapped();
+    return ptr;
 #else
     return impl->Map(virtual_addr, offset, size, ToPosixProt(std::bit_cast<Core::MemoryProt>(prot)),
                      fd);
@@ -864,7 +880,24 @@ VAddr AddressSpace::Unmap(VAddr virtual_addr, u64* size) {
             backing_pages[base_page + (offset >> Traits::PAGE_BITS)] = nullptr;
         }
     }
-    return impl->Unmap(virtual_addr, size);
+    const VAddr unmapped = impl->Unmap(virtual_addr, size);
+    NotifyRemapped();
+    return unmapped;
+}
+
+void AddressSpace::SetRemapCallback(RemapCallback callback) {
+    remap_callback = std::move(callback);
+}
+
+void AddressSpace::NotifyRemapped() {
+#ifdef _WIN32
+    // Runs without the address space lock held, the callback protects memory again.
+    for (const auto& [addr, size] : impl->TakeRemappedRanges()) {
+        if (remap_callback) {
+            remap_callback(addr, size);
+        }
+    }
+#endif
 }
 
 void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms) {
