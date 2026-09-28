@@ -138,6 +138,11 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    // Stages left over from a pipeline whose load failed half-way must not leak into this one:
+    // a stale entry for a stage this key does not use would be bound without user data.
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+    fetch_shader = nullptr;
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -206,6 +211,11 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // Stages left over from a pipeline whose load failed half-way must not leak into this one:
+    // a stale entry for a stage this key does not use would be bound without user data.
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+    fetch_shader = nullptr;
     graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -290,6 +300,8 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             module = CompileSPV(spv, instance.GetDevice());
         }
     }
+    // The specialization must reference the cached program's info, not the temporary one.
+    spec.info = &it_pgm.value()->info;
     it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);
 
     infos[stage] = &it_pgm.value()->info;
