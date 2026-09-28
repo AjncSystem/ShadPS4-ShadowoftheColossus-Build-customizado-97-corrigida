@@ -81,6 +81,18 @@ Liverpool::~Liverpool() {
     process_thread.join();
 }
 
+void Liverpool::WriteFenceValue(void* address, u64 data, u32 num_bytes) {
+    // The value is written to the backing memory directly (the GPU may target pages the guest
+    // mapped read-only), which the memory tracker cannot see. Invalidate first so a copy of the
+    // page already uploaded to the GPU is not reused with the old value, and so GPU-written data
+    // sharing the page is read back before the new value lands on top of it.
+    if (rasterizer) {
+        rasterizer->InvalidateMemory(std::bit_cast<VAddr>(address), num_bytes, true);
+    }
+    auto* memory = Core::Memory::Instance();
+    ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+}
+
 void Liverpool::ProcessCommands() {
     // Process incoming commands with high priority
     while (num_commands) {
@@ -674,9 +686,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         rasterizer->Finish();
                     }
                 }
-                event_eos->SignalFence([](void* address, u64 data, u32 num_bytes) {
-                    auto* memory = Core::Memory::Instance();
-                    ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                event_eos->SignalFence([this](void* address, u64 data, u32 num_bytes) {
+                    WriteFenceValue(address, data, num_bytes);
                 });
                 if (event_eos->command == PM4CmdEventWriteEos::Command::GdsStore) {
                     ASSERT(event_eos->size == 1);
@@ -697,9 +708,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     }
                 }
                 event_eop->SignalFence(
-                    [](void* address, u64 data, u32 num_bytes) {
-                        auto* memory = Core::Memory::Instance();
-                        ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                    [this](void* address, u64 data, u32 num_bytes) {
+                        WriteFenceValue(address, data, num_bytes);
                     },
                     [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
                 break;

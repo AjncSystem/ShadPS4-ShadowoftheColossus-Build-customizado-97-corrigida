@@ -191,6 +191,8 @@ private:
     Task ProcessCompute(std::span<const u32> acb, u32 vqid);
 
     void ProcessCommands();
+    /// Writes an EOP/EOS fence value, keeping GPU caches of that memory coherent.
+    void WriteFenceValue(void* address, u64 data, u32 num_bytes);
     void Process(std::stop_token stoken);
 
     struct GpuQueue {
