@@ -576,8 +576,17 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
         index = ir.IAdd(index, vgpr_index);
     }
     if (buffer.add_tid_enable) {
-        ASSERT_MSG(info.sw_stage == SwStage::Compute,
-                   "Thread ID buffer addressing is not supported outside of compute.");
+        // thread_id[5:0] is the lane index within the wave. SubgroupLocalInvocationId provides it
+        // in every stage (flat outside vertex), so graphics stages can use the same lowering as
+        // compute instead of aborting.
+        if (info.sw_stage != SwStage::Compute) {
+            static bool warned = false;
+            if (!std::exchange(warned, true)) {
+                LOG_WARNING(Render_Recompiler,
+                            "Thread ID buffer addressing in non-compute stage {}, using lane id",
+                            u32(info.sw_stage));
+            }
+        }
         const IR::U32 thread_id{ir.LaneId()};
         index = ir.IAdd(index, thread_id);
     }
