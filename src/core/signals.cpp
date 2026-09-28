@@ -757,6 +757,9 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
                              pExp->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
                              pExp->ExceptionRecord->ExceptionInformation[1]);
             }
+            LOG_CRITICAL(Debug, "CRASHDUMP host_exe_base={} eboot_base={:#x} eboot_off={:#x}",
+                         fmt::ptr(GetModuleHandleW(nullptr)), MemoryPatcher::g_eboot_address,
+                         c->Rip - MemoryPatcher::g_eboot_address);
             LOG_CRITICAL(Debug,
                          "CRASHDUMP rip={:#x} rsp={:#x} rbp={:#x} rax={:#x} rbx={:#x} "
                          "rcx={:#x} rdx={:#x} rsi={:#x} rdi={:#x}",
