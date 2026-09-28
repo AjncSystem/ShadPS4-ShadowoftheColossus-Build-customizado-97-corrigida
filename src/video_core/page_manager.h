@@ -35,6 +35,9 @@ public:
     /// Register a range of mapped gpu memory.
     void OnGpuMap(VAddr address, size_t size);
 
+    /// DEBUG: (write watchers << 8) | read watchers of a page, or ~0 if untracked.
+    u32 DebugWatchers(VAddr address) const;
+
     /// Unregister a range of gpu memory that was unmapped.
     void OnGpuUnmap(VAddr address, size_t size);
 

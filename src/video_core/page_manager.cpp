@@ -34,6 +34,10 @@
 #include "common/spin_lock.h"
 #endif
 
+namespace Vulkan {
+void SotcRecordFault(u64 addr, bool is_write, bool gpu_thread);
+}
+
 namespace VideoCore {
 
 struct PageManager::Impl {
@@ -105,6 +109,55 @@ struct PageManager::Impl {
     }
 
     virtual void Protect(VAddr address, size_t size, Core::MemoryPermission perms) = 0;
+
+    /// Re-applies the protection implied by the watchers of every page in the range, after the
+    /// host mapping was recreated with its default protection.
+    void ReapplyProtection(VAddr address, u64 size) {
+        const u64 page_start = address >> PM_PAGE_BITS;
+        const u64 page_end = std::min<u64>(Common::DivCeil(address + size, PM_PAGE_SIZE),
+                                           NUM_ADDRESS_PAGES);
+        std::vector<u64> locked_pages;
+        u64 run_begin{};
+        u64 run_pages{};
+        Core::MemoryPermission run_perms{};
+        const auto flush = [&] {
+            if (run_pages != 0) {
+                Protect(run_begin << PM_PAGE_BITS, run_pages << PM_PAGE_BITS, run_perms);
+                run_pages = 0;
+            }
+        };
+        for (u64 page = page_start; page < page_end; ++page) {
+            PageState* state = cached_pages.find(page);
+            if (!state) {
+                flush();
+                continue;
+            }
+            locks[page].lock();
+            locked_pages.push_back(page);
+            const auto perms = state->Perms();
+            if (perms == Core::MemoryPermission::ReadWrite) {
+                flush();
+                continue;
+            }
+            if (run_pages != 0 && perms == run_perms && run_begin + run_pages == page) {
+                ++run_pages;
+            } else {
+                flush();
+                run_begin = page;
+                run_pages = 1;
+                run_perms = perms;
+            }
+        }
+        flush();
+        for (const u64 page : locked_pages) {
+            locks[page].unlock();
+        }
+    }
+
+    u32 DebugWatchers(VAddr address) {
+        const PageState* state = cached_pages.find(address >> PM_PAGE_BITS);
+        return state ? (u32(state->num_write_watchers) << 8) | state->num_read_watchers : ~0U;
+    }
 
     void EnsurePages(VAddr begin, VAddr end) {
         const size_t start_page = begin >> PM_PAGE_BITS;
@@ -413,6 +466,11 @@ struct SignalImpl : public PageManager::Impl {
     SignalImpl(Vulkan::Rasterizer* rasterizer_) : Impl() {
         rasterizer = rasterizer_;
 
+        // Splitting a mapped placeholder on Windows recreates the neighbouring views with their
+        // default protection, silently dropping the write/read tracking of those pages.
+        Core::Memory::Instance()->GetAddressSpace().SetRemapCallback(
+            [this](VAddr address, u64 size) { ReapplyProtection(address, size); });
+
         // Should be called first.
         constexpr auto priority = std::numeric_limits<u32>::min();
         Core::Signals::Instance()->RegisterAccessViolationHandler(GuestFaultSignalHandler,
@@ -432,6 +490,7 @@ struct SignalImpl : public PageManager::Impl {
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
+        Vulkan::SotcRecordFault(addr, Common::IsWriteError(context), is_gpu_thread);
         if (Common::IsWriteError(context)) {
             return rasterizer->InvalidateMemory(addr, 8, is_gpu_thread);
         } else {
@@ -458,6 +517,10 @@ PageManager::PageManager(Vulkan::Rasterizer* rasterizer_) {
 }
 
 PageManager::~PageManager() = default;
+
+u32 PageManager::DebugWatchers(VAddr address) const {
+    return impl->DebugWatchers(address);
+}
 
 void PageManager::OnGpuMap(VAddr address, size_t size) {
     impl->OnMap(address, size);
