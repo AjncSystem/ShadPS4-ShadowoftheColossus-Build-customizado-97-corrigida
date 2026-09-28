@@ -77,6 +77,16 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    // System memory the sparse arenas can fall back to once video memory is exhausted.
+    const auto& memory_properties = instance.GetMemoryProperties();
+    for (u32 i = 0; i < memory_properties.memoryTypeCount; ++i) {
+        const auto& heap = memory_properties.memoryHeaps[memory_properties.memoryTypes[i].heapIndex];
+        if (((reqs.memoryTypeBits >> i) & 1) != 0 &&
+            !(heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal)) {
+            arena_fallback_memory_type_index = i;
+            break;
+        }
+    }
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(vk::DeviceAddress);
@@ -202,6 +212,10 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
     return {staging.buffer, staging.offset};
 }
 
+bool BufferCache::IsRegionCpuModified(VAddr addr, size_t size) {
+    return memory_tracker->IsRegionCpuModified(addr, size);
+}
+
 bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
     if (memory_tracker->IsRegionGpuModified(addr, size)) {
         return true;
@@ -293,11 +307,25 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         return;
     }
 
-    const vk::MemoryAllocateInfo alloc_info = {
+    vk::MemoryAllocateInfo alloc_info = {
         .allocationSize = resident_blocks << block_shift,
         .memoryTypeIndex = arena_memory_type_index,
     };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    auto [alloc_result, device_memory] = instance.GetDevice().allocateMemory(alloc_info);
+    if (alloc_result == vk::Result::eErrorOutOfDeviceMemory && arena_fallback_memory_type_index) {
+        // Resident arena ranges are never released, so a long session can exhaust video memory.
+        // Keep running from system memory (slower GPU access) instead of aborting.
+        static bool warned = false;
+        if (!std::exchange(warned, true)) {
+            LOG_WARNING(Render, "Video memory exhausted, placing new buffer memory in system RAM");
+        }
+        alloc_info.memoryTypeIndex = *arena_fallback_memory_type_index;
+        const auto retry = instance.GetDevice().allocateMemory(alloc_info);
+        alloc_result = retry.result;
+        device_memory = retry.value;
+    }
+    ASSERT_MSG(alloc_result == vk::Result::eSuccess, "Failed to allocate buffer arena memory: {}",
+               vk::to_string(alloc_result));
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =

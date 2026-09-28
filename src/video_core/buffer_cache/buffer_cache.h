@@ -181,6 +181,7 @@ private:
     u32 num_flushes_per_frame{};
 
     u32 arena_memory_type_index{};
+    std::optional<u32> arena_fallback_memory_type_index;
     u32 block_size{};
     u32 block_shift{};
     u32 blocks_per_arena_page{};
