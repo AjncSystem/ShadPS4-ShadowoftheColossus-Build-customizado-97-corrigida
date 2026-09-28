@@ -76,6 +76,13 @@ Emulator::Emulator() {
     Common::NtApi::Initialize();
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     SetErrorMode(SetErrorMode(0) | SEM_NOGPFAULTERRORBOX);
+    // DEBUG: report console control events (Ctrl+C/Break/close), which SDL turns into a quit.
+    SetConsoleCtrlHandler(
+        [](DWORD type) -> BOOL {
+            LOG_CRITICAL(Core, "SOTCEXIT console control event {}", type);
+            return FALSE;
+        },
+        TRUE);
     // need to init this in order for winsock2 to work
     WORD versionWanted = MAKEWORD(2, 2);
     WSADATA wsaData;
