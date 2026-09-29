@@ -278,6 +278,16 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
 
     vk::ShaderModule module{};
 
+    // Shader patches (user/shader/patch) must also apply to pipelines restored from the cache.
+    if (EmulatorSettings.IsPatchShaders()) {
+        if (auto patch = GetShaderPatch(program->info.pgm_hash, program->info.hw_stage, perm_idx,
+                                        "spv")) {
+            LOG_INFO(Loader, "Loaded patch for cached {} shader {:#x}", program->info.hw_stage,
+                     program->info.pgm_hash);
+            spv = std::move(*patch);
+        }
+    }
+
     auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
     if (new_program) {
         module = CompileSPV(spv, instance.GetDevice());
