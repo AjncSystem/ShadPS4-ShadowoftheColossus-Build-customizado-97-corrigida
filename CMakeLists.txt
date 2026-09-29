@@ -1384,10 +1384,12 @@ if (WIN32)
     endif()
 
     # Increase stack commit area (Needed, otherwise there are crashes)
+    # The reserve covers host threads that run deep recursive work (shader recompilation, SRT
+    # walkers); running out of stack there kills the process without reaching any handler.
     if (MSVC)
-        target_link_options(shadps4 PRIVATE /STACK:0x200000,0x200000)
+        target_link_options(shadps4 PRIVATE /STACK:0x800000,0x200000)
     else()
-        target_link_options(shadps4 PRIVATE -Wl,--stack,2097152)
+        target_link_options(shadps4 PRIVATE -Wl,--stack,8388608)
     endif()
 
     # Change base image address

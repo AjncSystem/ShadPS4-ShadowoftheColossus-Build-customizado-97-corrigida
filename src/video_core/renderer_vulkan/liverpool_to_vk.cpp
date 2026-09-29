@@ -425,7 +425,10 @@ vk::ComponentSwizzle ComponentSwizzle(AmdGpu::CompSwizzle comp_swizzle) {
     case AmdGpu::CompSwizzle::Alpha:
         return vk::ComponentSwizzle::eA;
     default:
-        UNREACHABLE();
+        // Values 2 and 3 are reserved; they only show up in garbage descriptors of unused
+        // bindings, which must not bring the emulator down.
+        LOG_ERROR(Render_Vulkan, "Invalid component swizzle {}", static_cast<u32>(comp_swizzle));
+        return vk::ComponentSwizzle::eIdentity;
     }
 }
 
@@ -782,10 +785,24 @@ static auto surface_format_table = []() constexpr {
 
 vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format) {
     vk::Format result = surface_format_table[GetSurfaceFormatTableIndex(data_format, num_format)];
-    bool found =
-        result != vk::Format::eUndefined || data_format == AmdGpu::DataFormat::FormatInvalid;
-    ASSERT_MSG(found, "Unknown data_format={} and num_format={}", static_cast<u32>(data_format),
-               static_cast<u32>(num_format));
+    if (result != vk::Format::eUndefined || data_format == AmdGpu::DataFormat::FormatInvalid) {
+        return result;
+    }
+    // Descriptors of unused bindings can hold combinations no real resource uses. Keep the bit
+    // layout with another number format rather than aborting the emulator.
+    for (const auto fallback : {AmdGpu::NumberFormat::Unorm, AmdGpu::NumberFormat::Uint,
+                                AmdGpu::NumberFormat::Float}) {
+        result = surface_format_table[GetSurfaceFormatTableIndex(data_format, fallback)];
+        if (result != vk::Format::eUndefined) {
+            break;
+        }
+    }
+    if (result == vk::Format::eUndefined) {
+        result = vk::Format::eR8G8B8A8Unorm;
+    }
+    LOG_ERROR(Render_Vulkan, "Unknown data_format={} and num_format={}, using {}",
+              static_cast<u32>(data_format), static_cast<u32>(num_format),
+              vk::to_string(result));
     return result;
 }
 
