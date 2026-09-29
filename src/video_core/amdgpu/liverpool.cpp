@@ -99,7 +99,8 @@ void Liverpool::OnCommandWaitTimeout() {
     if (reported++ < 4) {
         LOG_CRITICAL(Render, "SOTCHANG command wait exceeded 5s (GPU thread busy)");
     }
-    // DEBUG: report straight to stderr, the async log is often lost if this ends badly.
+    // DEBUG: report straight to stderr; suspending threads to scan their stacks
+    // (WriteHangReport) can itself deadlock on a lock held by a suspended thread.
     std::fprintf(stderr, "SLOW-COMMAND-WAIT >5s\n");
     std::fflush(stderr);
 }
