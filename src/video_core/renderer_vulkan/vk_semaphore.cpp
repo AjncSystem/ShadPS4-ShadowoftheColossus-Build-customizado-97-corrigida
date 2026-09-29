@@ -4,6 +4,7 @@
 #include <limits>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include <cstdio>
 
 #include "common/assert.h"
 
@@ -77,6 +78,18 @@ void Semaphore::Wait(u64 tick) {
                           "GPU wait is taking long: waiting for tick {}, semaphore at {} ({}), "
                           "cpu tick {}",
                           tick, counter, vk::to_string(res), CurrentTick());
+#ifdef _WIN32
+                // DEBUG: the async log is usually lost when this ends in a crash.
+                char line[160];
+                const int len = std::snprintf(line, sizeof(line),
+                                              "SLOW-GPU-WAIT tick=%llu sem=%llu cpu=%llu tid=%lu\n",
+                                              static_cast<unsigned long long>(tick),
+                                              static_cast<unsigned long long>(counter),
+                                              static_cast<unsigned long long>(CurrentTick()),
+                                              0ul);
+                std::fwrite(line, 1, static_cast<size_t>(len), stderr);
+                std::fflush(stderr);
+#endif
             }
             continue;
         }

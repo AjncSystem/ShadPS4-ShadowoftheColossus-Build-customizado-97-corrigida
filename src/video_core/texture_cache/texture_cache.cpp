@@ -58,6 +58,11 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
         std::max<u64>(std::min(device_local_memory - min_vacancy_critical, min_spacing_critical),
                       DEFAULT_CRITICAL_GC_MEMORY));
     trigger_gc_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
+    // Buffer arena residency is never released and competes for the same budget, so start
+    // aggressive collection well before the budget is reached (80% left too little room on
+    // 8 GB cards and new allocations failed).
+    critical_gc_memory = std::min<u64>(critical_gc_memory, device_local_memory * 6 / 10);
+    pressure_gc_memory = std::min<u64>(pressure_gc_memory, critical_gc_memory);
 }
 
 TextureCache::~TextureCache() = default;
@@ -113,11 +118,10 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
 }
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
-    if (image.hash == 0) {
-        // Initialize hash
-        const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
-        image.hash = XXH3_64bits(addr, image.info.guest_size);
-    }
+    // Do not hash guest memory here: this runs from the CPU fault handler with the cache mutex
+    // held, and reading a GPU-modified (read-protected) page faults again, waits for the GPU
+    // thread to flush it, while the GPU thread waits for this mutex. RefreshImage hashes the
+    // first texels on the GPU thread anyway (an unset hash simply means "re-upload").
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);
 }
@@ -938,6 +942,24 @@ void TextureCache::GarbageCollectImages() {
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
     }
+    {
+        // DEBUG: periodic VRAM report.
+        static u32 calls = 0;
+        if (calls++ % 300 == 0) {
+            u64 image_bytes = 0;
+            u32 num_images = 0;
+            for (const Image& image : slot_images) {
+                image_bytes += image.backing ? image.GetHostImageSize() : 0;
+                ++num_images;
+            }
+            LOG_CRITICAL(Render,
+                         "SOTCVRAM used {} MB budget {} MB trigger {} pressure {} critical {} "
+                         "images {} ({} MB)",
+                         total_used_memory >> 20, instance.GetTotalMemoryBudget() >> 20,
+                         trigger_gc_memory >> 20, pressure_gc_memory >> 20,
+                         critical_gc_memory >> 20, num_images, image_bytes >> 20);
+        }
+    }
     if (total_used_memory < trigger_gc_memory) {
         return;
     }
@@ -952,7 +974,7 @@ void TextureCache::GarbageCollectImages() {
         aggresive = allow_aggressive && total_used_memory >= critical_gc_memory;
         ticks_to_destroy = aggresive ? 160 : pressured ? 80 : 16;
         ticks_to_destroy = std::min(ticks_to_destroy, gc_tick);
-        num_deletions = aggresive ? 40 : pressured ? 20 : 10;
+        num_deletions = aggresive ? 128 : pressured ? 20 : 10;
     };
     const auto clean_up = [&](ImageId image_id) {
         if (num_deletions == 0) {

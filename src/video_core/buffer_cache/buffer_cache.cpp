@@ -7,6 +7,7 @@
 #include "common/alignment.h"
 #include "core/debug_state.h"
 #include "core/memory.h"
+#include "core/signals.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -126,7 +127,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
+        Core::RecordFaultStage(0x30, window_start);
         DownloadMemory(arena, window_start, window_end - window_start);
+        Core::RecordFaultStage(0x31, window_end);
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
@@ -134,7 +137,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
     if (assume_locks) {
         flush_request();
     } else {
+        Core::RecordFaultStage(0x20, device_addr);
         liverpool->SendCommand<true>(std::move(flush_request));
+        Core::RecordFaultStage(0x21, device_addr);
     }
 }
 
@@ -326,10 +331,23 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     }
     ASSERT_MSG(alloc_result == vk::Result::eSuccess, "Failed to allocate buffer arena memory: {}",
                vk::to_string(alloc_result));
+    {
+        // DEBUG: track how much arena memory has been made resident (it is never released).
+        static u64 total_resident = 0;
+        static u64 next_report = 0;
+        total_resident += alloc_info.allocationSize;
+        if (total_resident >= next_report) {
+            next_report = total_resident + 128_MB;
+            LOG_CRITICAL(Render, "SOTCVRAM arena resident {} MB (type {})", total_resident >> 20,
+                         alloc_info.memoryTypeIndex);
+        }
+    }
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
+
+    backing_blocks[static_cast<VkDeviceMemory>(device_memory)] += resident_blocks;
 
     u64 memory_offset{};
     ArenaBinds* binds = BindsForArena(arena);
@@ -413,6 +431,72 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
     auto& tile_manager = texture_cache.GetTileManager();
     tile_manager.TileImage(image, buffer_copies, arena, arena_offset);
     return true;
+}
+
+void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
+    // Only whole blocks inside the unmapped range can go; partial blocks may back neighbours.
+    const u64 first_block = Common::AlignUp(device_addr, u64{block_size}) >> block_shift;
+    const u64 end_block = (device_addr + size) >> block_shift;
+    if (first_block >= end_block) {
+        return;
+    }
+    boost::container::small_vector<Backing, 16> released;
+    resident_ranges.ForEachInRange(first_block, end_block, [&](const Backing& backing) {
+        const u64 start = std::max(first_block, backing.start);
+        const u64 end = std::min(end_block, backing.end);
+        if (start < end) {
+            released.push_back(backing.SubRange(start, end));
+        }
+    });
+    if (released.empty()) {
+        return;
+    }
+    u64 freed_bytes = 0;
+    for (const Backing& range : released) {
+        // Split at arena page boundaries, each page may belong to a different arena.
+        for (u64 start = range.start; start < range.end;) {
+            const u64 page = start >> blocks_per_arena_page_shift;
+            const u64 end = std::min(range.end, (page + 1) << blocks_per_arena_page_shift);
+            if (const Buffer* arena = address_space[page]) {
+                BindsForArena(arena)->binds.push_back(vk::SparseMemoryBind{
+                    .resourceOffset = (start << block_shift) - arena->cpu_addr,
+                    .size = (end - start) << block_shift,
+                    .memory = {},
+                    .memoryOffset = 0,
+                });
+            }
+            start = end;
+        }
+        // Shaders reach arena memory through the BDA page table; a null entry faults the block
+        // back in (fault buffer) instead of touching unbound memory.
+        runtime.FillBuffer(bda_pagetable_buffer.get(), range.start * sizeof(vk::DeviceAddress),
+                           (range.end - range.start) * sizeof(vk::DeviceAddress), 0u);
+        const auto memory = static_cast<VkDeviceMemory>(range.memory);
+        auto it = backing_blocks.find(memory);
+        if (it != backing_blocks.end()) {
+            it->second -= std::min(it->second, range.end - range.start);
+            if (it->second == 0) {
+                backing_blocks.erase(it);
+                // The unbind is submitted before this tick's work, which waits for it.
+                scheduler.DeferOperation([device = instance.GetDevice(), memory = range.memory] {
+                    device.freeMemory(memory);
+                });
+            }
+        }
+        freed_bytes += (range.end - range.start) << block_shift;
+    }
+    resident_ranges.Subtract(first_block, end_block);
+    sync_batch.Subtract(first_block << block_shift, end_block << block_shift);
+    gpu_modified_ranges.Subtract(first_block << block_shift,
+                                 (end_block - first_block) << block_shift);
+
+    static u64 total_freed = 0;
+    static u64 next_report = 0;
+    total_freed += freed_bytes;
+    if (total_freed >= next_report) {
+        next_report = total_freed + 128_MB;
+        LOG_CRITICAL(Render, "SOTCVRAM arena released {} MB total", total_freed >> 20);
+    }
 }
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {

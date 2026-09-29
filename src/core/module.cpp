@@ -200,6 +200,9 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     static constexpr KnownRedZoneFunction KnownRedZoneFunctions[] = {
         // Shadow of the Colossus (EU 1.01): keeps pointers at [rsp-0x8..-0x18] across a loop.
         {"CUSA08809", "eboot.bin", 0xEDFB30},
+        // Shadow of the Colossus (EU 1.01): a tracked-page write at +0xF67EF7 clobbers a pointer
+        // kept below rsp that +0xF67D2B then dereferences (null+0x6d0 on the title screen).
+        {"CUSA08809", "eboot.bin", 0xF67D2B},
     };
     std::vector<uintptr_t> red_zone_selected;
     if (!use_static_windows_guest_red_zone_protection) {

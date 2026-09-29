@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <unordered_map>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -106,6 +107,9 @@ public:
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
+    /// Releases the arena memory backing a range the guest unmapped. GPU thread only.
+    void ReleaseMemory(VAddr device_addr, u64 size);
+
     /// Flushes pending synchronization requests
     void FlushSyncBatch(bool from_scheduler = false);
 
@@ -164,6 +168,8 @@ private:
         }
     };
     IntervalList<Backing> resident_ranges;
+    /// Number of resident blocks still bound to each backing allocation.
+    std::unordered_map<VkDeviceMemory, u64> backing_blocks;
 
     struct SyncRange : Interval {
         bool written;

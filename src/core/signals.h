@@ -66,4 +66,7 @@ private:
 
 using Signals = Common::Singleton<SignalDispatch>;
 
+/// DEBUG: writes a stage marker (code 0xABC1xxxx) into the fault ring, if enabled.
+void RecordFaultStage(u32 stage, u64 addr);
+
 } // namespace Core

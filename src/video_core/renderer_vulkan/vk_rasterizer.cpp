@@ -62,6 +62,7 @@
 #include <array>
 #include <memory>
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "core/signals.h"
 #include <atomic>
 #include <array>
 #include <memory>
@@ -1726,8 +1727,11 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
+    Core::RecordFaultStage(0x10, addr);
     buffer_cache.InvalidateMemory(addr, size, assume_locks);
+    Core::RecordFaultStage(0x11, addr);
     texture_cache.InvalidateMemory(addr, size);
+    Core::RecordFaultStage(0x12, addr);
     return true;
 }
 
@@ -1768,6 +1772,8 @@ void Rasterizer::RegisterMemory(VAddr addr, u64 size) {
 
 void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
     buffer_cache.InvalidateMemory(addr, size);
+    // Give the arena memory back; it runs on the GPU thread, ordered before later draws.
+    liverpool->SendCommand<false>([this, addr, size] { buffer_cache.ReleaseMemory(addr, size); });
     texture_cache.UnmapMemory(addr, size);
     {
         std::scoped_lock lock{mapped_ranges_mutex};

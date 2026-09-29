@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <thread>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -71,10 +73,9 @@ namespace Core {
 std::mutex exit_mutex{};
 
 #ifdef _WIN32
-namespace {
 // Writes a minidump for exceptions nothing else handled, so crashes that leave no log behind
 // (e.g. faults while the logger or the signal dispatcher is unusable) can still be analysed.
-std::wstring g_crash_dump_dir;
+static std::wstring g_crash_dump_dir;
 
 LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* info) {
     using PFN_MiniDumpWriteDump = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, void*, void*, void*);
@@ -82,14 +83,19 @@ LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* info) {
     const auto write_dump =
         dbghelp ? reinterpret_cast<PFN_MiniDumpWriteDump>(GetProcAddress(dbghelp, "MiniDumpWriteDump"))
                 : nullptr;
-    if (!write_dump || g_crash_dump_dir.empty()) {
+    // info == nullptr asks for a hang dump (all thread stacks, no exception).
+    static std::atomic_flag crash_written{};
+    static std::atomic_flag hang_written{};
+    auto& written = info ? crash_written : hang_written;
+    if (!write_dump || g_crash_dump_dir.empty() || written.test_and_set()) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     SYSTEMTIME time{};
     GetLocalTime(&time);
     wchar_t path[MAX_PATH];
-    swprintf_s(path, L"%s\crash_%04u%02u%02u_%02u%02u%02u.dmp", g_crash_dump_dir.c_str(),
-               time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
+    swprintf_s(path, L"%s\\%s_%04u%02u%02u_%02u%02u%02u.dmp", g_crash_dump_dir.c_str(),
+               info ? L"crash" : L"hang", time.wYear, time.wMonth, time.wDay, time.wHour,
+               time.wMinute, time.wSecond);
     const HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
@@ -102,12 +108,12 @@ LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* info) {
     } exception_info{GetCurrentThreadId(), info, FALSE};
     // MiniDumpWithDataSegs | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo
     constexpr int DumpType = 0x1 | 0x40 | 0x1000;
-    write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, DumpType, &exception_info,
+    write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, DumpType,
+               info ? &exception_info : nullptr,
                nullptr, nullptr);
     CloseHandle(file);
     return EXCEPTION_CONTINUE_SEARCH;
 }
-} // namespace
 #endif
 
 Emulator::Emulator() {

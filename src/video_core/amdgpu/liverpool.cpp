@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <boost/preprocessor/stringize.hpp>
+#include <cstdio>
 
 #include "common/assert.h"
 #include "common/debug.h"
@@ -91,6 +92,16 @@ void Liverpool::WriteFenceValue(void* address, u64 data, u32 num_bytes) {
     }
     auto* memory = Core::Memory::Instance();
     ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+}
+
+void Liverpool::OnCommandWaitTimeout() {
+    static std::atomic<u32> reported{0};
+    if (reported++ < 4) {
+        LOG_CRITICAL(Render, "SOTCHANG command wait exceeded 5s (GPU thread busy)");
+    }
+    // DEBUG: report straight to stderr, the async log is often lost if this ends badly.
+    std::fprintf(stderr, "SLOW-COMMAND-WAIT >5s\n");
+    std::fflush(stderr);
 }
 
 void Liverpool::ProcessCommands() {

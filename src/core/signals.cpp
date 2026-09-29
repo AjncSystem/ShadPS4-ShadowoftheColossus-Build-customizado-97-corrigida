@@ -19,6 +19,8 @@
 #include <mutex>
 #include <windows.h>
 #include <tlhelp32.h>
+#include <cstdlib>
+#include <intrin.h>
 #include "common/memory_patcher.h"
 static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 #else
@@ -631,7 +633,93 @@ static bool SotcHandle(EXCEPTION_POINTERS* pExp) {
     return false;
 }
 
-static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
+// DEBUG flight recorder: every exception entering the handler goes into a ring buffer backed by a
+// file mapping (SHADPS4_FAULT_RING=<path>). The pages reach the file even if the process is
+// killed without running any handler, so the last faults before a silent death can be read.
+struct FaultRecord {
+    u64 tsc;
+    u32 tid;
+    u32 code;
+    u64 rip;
+    u64 rsp;
+    u64 addr;
+    u64 info0;
+};
+struct FaultRing {
+    u64 magic;
+    u64 eboot_base;
+    std::atomic<u64> next;
+    u64 capacity;
+    FaultRecord records[1];
+};
+static FaultRing* OpenFaultRing() {
+    static FaultRing* ring = []() -> FaultRing* {
+        const char* path = std::getenv("SHADPS4_FAULT_RING");
+        if (!path) {
+            return nullptr;
+        }
+        constexpr u64 Capacity = 1u << 16;
+        const u64 size = sizeof(FaultRing) + Capacity * sizeof(FaultRecord);
+        const HANDLE file = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+                                        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            return nullptr;
+        }
+        const HANDLE mapping =
+            CreateFileMappingA(file, nullptr, PAGE_READWRITE, 0, static_cast<DWORD>(size), nullptr);
+        if (!mapping) {
+            return nullptr;
+        }
+        auto* r = static_cast<FaultRing*>(MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, size));
+        if (r) {
+            r->magic = 0x474E495254554146ULL; // "FAULTRNG"
+            r->capacity = Capacity;
+            static constexpr char Msg[] = "FAULT-RING open\n";
+            DWORD written = 0;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), Msg, sizeof(Msg) - 1, &written, nullptr);
+        }
+        return r;
+    }();
+    return ring;
+}
+void RecordFaultStage(u32 stage, u64 addr) {
+#ifdef _WIN32
+    FaultRing* ring = OpenFaultRing();
+    if (!ring) {
+        return;
+    }
+    const u64 slot = ring->next.fetch_add(1, std::memory_order_relaxed) % ring->capacity;
+    FaultRecord& rec = ring->records[slot];
+    rec.tsc = __rdtsc();
+    rec.tid = GetCurrentThreadId();
+    rec.code = 0xABC10000u | stage;
+    rec.rip = 0;
+    rec.rsp = reinterpret_cast<u64>(_AddressOfReturnAddress());
+    rec.addr = addr;
+    rec.info0 = 0;
+#endif
+}
+
+static void RecordFault(const EXCEPTION_POINTERS* pExp, u32 stage = 0) {
+    FaultRing* ring = OpenFaultRing();
+    if (!ring || !pExp || !pExp->ExceptionRecord || !pExp->ContextRecord) {
+        return;
+    }
+    ring->eboot_base = MemoryPatcher::g_eboot_address;
+    const u64 slot = ring->next.fetch_add(1, std::memory_order_relaxed) % ring->capacity;
+    FaultRecord& rec = ring->records[slot];
+    const auto* er = pExp->ExceptionRecord;
+    rec.tsc = __rdtsc();
+    rec.tid = GetCurrentThreadId();
+    rec.code = stage == 0 ? static_cast<u32>(er->ExceptionCode) : 0xABC00000u | stage;
+    rec.rip = pExp->ContextRecord->Rip;
+    rec.rsp = pExp->ContextRecord->Rsp;
+    rec.addr = er->NumberParameters > 1 ? er->ExceptionInformation[1] : 0;
+    rec.info0 = er->NumberParameters > 0 ? er->ExceptionInformation[0] : 0;
+}
+
+static LONG WINAPI SignalHandlerImpl(EXCEPTION_POINTERS* pExp) noexcept {
+    RecordFault(pExp);
     using namespace Libraries::Kernel;
     if (pExp != nullptr && pExp->ExceptionRecord != nullptr) {
         switch (pExp->ExceptionRecord->ExceptionCode) {
@@ -778,6 +866,7 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
         break;
     }
 
+    RecordFault(pExp, handled ? 1 : 2);
     if (handled) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
@@ -791,7 +880,11 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
 
     const bool report_unhandled =
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
+    RecordFault(pExp, 3);
     if (report_unhandled) {
+        // The log is asynchronous and usually lost when the process dies right after this, so
+        // leave a minidump first.
+        WriteCrashDump(pExp);
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
         // CRASHDUMP: registers, fault address and stack scan for post-mortem analysis
         if (pExp != nullptr && pExp->ContextRecord != nullptr) {
@@ -889,6 +982,65 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Guest threads (and the game's fibers) often run on tiny stacks: Shadow of the Colossus packs
+// hundreds of 16 KB job stacks back to back with no guard pages. On Windows the fault handler
+// runs on whatever stack faulted, and the page tracking/readback path needs far more than that,
+// so it overflowed into the neighbouring stack or killed the process outright. When a fault
+// arrives on a stack that is not the thread's own host stack, run the handler on a per-thread
+// host stack instead; only the frame the kernel pushes stays on the guest stack.
+asm(R"(
+    .text
+    .p2align 4
+    .globl shad_call_on_stack
+shad_call_on_stack:
+    push rbp
+    mov rbp, rsp
+    mov rsp, r8
+    sub rsp, 32
+    call rdx
+    mov rsp, rbp
+    pop rbp
+    ret
+)");
+extern "C" LONG shad_call_on_stack(EXCEPTION_POINTERS* pExp, LONG (*fn)(EXCEPTION_POINTERS*),
+                                   void* stack_top);
+
+static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
+    static constexpr size_t AltStackSize = 512_KB;
+    struct AltStack {
+        u8* base{};
+        ~AltStack() {
+            if (base) {
+                VirtualFree(base, 0, MEM_RELEASE);
+            }
+        }
+    };
+    thread_local AltStack alt;
+    auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
+    const auto sp = reinterpret_cast<u64>(_AddressOfReturnAddress());
+    if (sp >= reinterpret_cast<u64>(tib->StackLimit) && sp < reinterpret_cast<u64>(tib->StackBase)) {
+        // Host stack, or already on the alternate stack (nested fault).
+        return SignalHandlerImpl(pExp);
+    }
+    if (!alt.base) {
+        alt.base = static_cast<u8*>(
+            VirtualAlloc(nullptr, AltStackSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (!alt.base) {
+            return SignalHandlerImpl(pExp);
+        }
+    }
+    // Point the TEB stack bounds at the alternate stack while on it, so stack probes, SEH and
+    // the nested-fault check above see a consistent stack.
+    void* const saved_base = tib->StackBase;
+    void* const saved_limit = tib->StackLimit;
+    tib->StackBase = alt.base + AltStackSize;
+    tib->StackLimit = alt.base;
+    const LONG result = shad_call_on_stack(pExp, &SignalHandlerImpl, alt.base + AltStackSize);
+    tib->StackBase = saved_base;
+    tib->StackLimit = saved_limit;
+    return result;
 }
 
 #else
@@ -1056,6 +1208,7 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
         UNREACHABLE_MSG("Unhandled signal {} at code address {}", sig, fmt::ptr(code_address));
     }
 }
+
 
 #endif
 
