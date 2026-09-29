@@ -1270,7 +1270,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     return (v ? std::strtoull(v, nullptr, 10) : 64ULL) << 20;
                 }();
                 constexpr u64 MaxSaneBindingSize = 256ULL << 20;
-                if ((vsharp.GetSize() >= 0xFFFF0000ULL || size > MaxSaneBindingSize) &&
+                // Written bindings keep their full range: a shader writing past a shortened
+                // binding would hit sparse pages that were never made resident.
+                if (!desc.is_written &&
+                    (vsharp.GetSize() >= 0xFFFF0000ULL || size > MaxSaneBindingSize) &&
                     unbounded_window != 0 && size > unbounded_window) {
                     static std::atomic<u32> reported{0};
                     if (vsharp.GetSize() < 0xFFFF0000ULL && reported++ < 16) {
