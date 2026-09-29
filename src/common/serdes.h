@@ -6,6 +6,7 @@
 #include "common/assert.h"
 #include "common/types.h"
 
+#include <stdexcept>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -104,11 +105,18 @@ struct Writer {
     Archive& ar;
 };
 
+/// Thrown when a serialized blob is truncated or corrupted (e.g. the emulator was killed while
+/// writing the shader cache). Loaders catch it and skip the entry.
+struct CorruptedData : std::runtime_error {
+    CorruptedData() : std::runtime_error("Invalid or corrupted deserialization container") {}
+};
+
 struct Reader {
     template <typename T>
     void Read(T* ptr, size_t size) {
-        ASSERT_MSG(ar.offset + size <= ar.container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        if (ar.offset + size > ar.container.size()) {
+            throw CorruptedData{};
+        }
         std::memcpy(reinterpret_cast<void*>(ptr), ar.CurrPtr(), size);
         ar.Advance(size);
     }

@@ -633,6 +633,17 @@ static bool SotcHandle(EXCEPTION_POINTERS* pExp) {
 
 static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
+    if (pExp != nullptr && pExp->ExceptionRecord != nullptr) {
+        switch (pExp->ExceptionRecord->ExceptionCode) {
+        case 0xE06D7363: // C++ exception, handled by its own catch blocks
+        case 0x406D1388: // Thread naming (MS_VC_EXCEPTION)
+        case 0x40010006: // DBG_PRINTEXCEPTION_C
+        case 0x4001000A: // DBG_PRINTEXCEPTION_WIDE_C
+            return EXCEPTION_CONTINUE_SEARCH;
+        default:
+            break;
+        }
+    }
     // DEBUG: report exceptions raised while this thread is already handling one. Written with
     // WriteFile only, so it works even when the logger or the heap is the problem.
     thread_local int handler_depth = 0;
