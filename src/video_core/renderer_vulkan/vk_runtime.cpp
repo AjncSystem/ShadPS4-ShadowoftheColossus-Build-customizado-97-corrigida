@@ -435,8 +435,18 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
 
 void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
     if (src->info.num_samples == 1 && dst->info.num_samples == 1) {
-        if (instance.IsMaintenance8Supported() ||
-            src->info.props.is_depth == dst->info.props.is_depth) {
+        // vkCmdCopyImage between two depth/stencil images requires the exact same format; a
+        // D32 -> D32S8 copy is invalid and made the driver write out of bounds (device lost,
+        // WriteInvalid). Such copies go through the buffer like depth <-> color ones.
+        const bool depth_format_mismatch = src->info.props.is_depth &&
+                                           dst->info.props.is_depth &&
+                                           src->info.pixel_format != dst->info.pixel_format;
+        const bool buffer_copy_possible =
+            src->info.resources.layers == dst->info.resources.layers &&
+            std::min(src->info.resources.levels, dst->info.resources.levels) == 1;
+        if (!(depth_format_mismatch && buffer_copy_possible) &&
+            (instance.IsMaintenance8Supported() ||
+             src->info.props.is_depth == dst->info.props.is_depth)) {
             CopyImage(src, dst);
         } else {
             // Perform depth from/to color copy using the intermediate copy buffer.
