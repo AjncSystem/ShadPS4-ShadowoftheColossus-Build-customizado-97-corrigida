@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <deque>
 #include <unordered_map>
 #include <boost/container/small_vector.hpp>
@@ -168,6 +169,16 @@ private:
         }
     };
     IntervalList<Backing> resident_ranges;
+    /// Readback windows requested recently; downloaded together with the next readback.
+    struct HotReadback {
+        VAddr addr;
+        u64 size;
+        std::chrono::steady_clock::time_point last_request;
+    };
+    static constexpr size_t MaxHotReadbacks = 64;
+    static constexpr auto HotReadbackLifetime = std::chrono::seconds(2);
+    std::vector<HotReadback> hot_readbacks;
+
     /// Number of resident blocks still bound to each backing allocation.
     std::unordered_map<VkDeviceMemory, u64> backing_blocks;
 

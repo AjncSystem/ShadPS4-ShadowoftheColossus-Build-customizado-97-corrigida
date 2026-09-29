@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -21,6 +23,11 @@ class VkCtxScope;
 }
 
 namespace Vulkan {
+
+// DEBUG: CPU/GPU synchronization counters, printed with the SOTCFRAME log line.
+extern std::atomic<u64> g_sotc_finish_count;
+extern std::atomic<u64> g_sotc_wait_us;
+extern std::atomic<u64> g_sotc_download_count;
 
 class Instance;
 

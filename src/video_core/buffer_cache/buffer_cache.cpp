@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/alignment.h"
@@ -121,7 +122,11 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 
         // GPU-modified ranges come as many small scattered islands,
         // so the download is widened to a window around the request
-        constexpr u64 WindowSize = 512_KB;
+        // DEBUG: SOTC_RB_WINDOW_KB overrides the window for tuning.
+        static const u64 WindowSize = [] {
+            const char* v = std::getenv("SOTC_RB_WINDOW_KB");
+            return v ? std::max<u64>(64, std::strtoull(v, nullptr, 10)) * 1_KB : u64{512_KB};
+        }();
         const VAddr arena_end = arena->cpu_addr + arena->size_bytes;
         const VAddr window_start =
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
@@ -144,43 +149,99 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 }
 
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
-    boost::container::small_vector<vk::BufferCopy, 1> copies;
+    // A readback costs a full CPU/GPU sync. Games tend to read back the same few regions every
+    // frame, one after another, so while the GPU is idle anyway also bring along the other
+    // regions read back recently ("hot" readbacks) that the GPU has modified since. The reads
+    // that follow then find their data already on the CPU instead of each needing a sync.
+    static const bool hot_enabled = [] {
+        const char* v = std::getenv("SOTC_RB_HOT");
+        return !v || v[0] != '0';
+    }();
+    const auto now = std::chrono::steady_clock::now();
+    struct Region {
+        const Buffer* arena;
+        VAddr addr;
+        u64 size;
+    };
+    boost::container::small_vector<Region, 16> regions;
+    regions.push_back({arena, device_addr, size});
+    if (hot_enabled) {
+        bool known = false;
+        for (auto& hot : hot_readbacks) {
+            if (hot.addr == device_addr && hot.size == size) {
+                hot.last_request = now;
+                known = true;
+                continue;
+            }
+            if (now - hot.last_request > HotReadbackLifetime) {
+                continue;
+            }
+            const u64 first_block = hot.addr >> block_shift;
+            const u64 last_block = (hot.addr + hot.size - 1) >> block_shift;
+            regions.push_back({GetArena(first_block, last_block), hot.addr, hot.size});
+        }
+        if (!known) {
+            if (hot_readbacks.size() < MaxHotReadbacks) {
+                hot_readbacks.push_back({device_addr, size, now});
+            } else {
+                auto oldest = std::ranges::min_element(hot_readbacks, {}, &HotReadback::last_request);
+                *oldest = {device_addr, size, now};
+            }
+        }
+    }
+
+    struct Pending {
+        const Buffer* arena;
+        VAddr addr;
+        u64 size;
+        boost::container::small_vector<vk::BufferCopy, 4> copies;
+    };
+    boost::container::small_vector<Pending, 16> pending;
     u64 total_size_bytes = 0;
-    const VAddr arena_base = arena->cpu_addr;
-    memory_tracker->ForEachDownloadRange<false>(device_addr, size, [&](u64 address, u64 size) {
-        const auto add_download = [&](VAddr start, VAddr end) {
-            const u64 new_offset = start - arena_base;
-            const u64 new_size = end - start;
-            copies.push_back(vk::BufferCopy{
-                .srcOffset = new_offset,
-                .dstOffset = total_size_bytes,
-                .size = new_size,
+    for (const Region& region : regions) {
+        Pending item{region.arena, region.addr, region.size, {}};
+        const VAddr arena_base = region.arena->cpu_addr;
+        memory_tracker->ForEachDownloadRange<false>(
+            region.addr, region.size, [&](u64 address, u64 range_size) {
+                const auto add_download = [&](VAddr start, VAddr end) {
+                    item.copies.push_back(vk::BufferCopy{
+                        .srcOffset = start - arena_base,
+                        .dstOffset = total_size_bytes,
+                        .size = end - start,
+                    });
+                    // Align up to avoid cache conflicts
+                    constexpr u64 align = 64ULL;
+                    total_size_bytes += Common::AlignUp(end - start, align);
+                };
+                gpu_modified_ranges.ForEachInRange(address, range_size, add_download);
+                gpu_modified_ranges.Subtract(address, range_size);
             });
-            // Align up to avoid cache conflicts
-            constexpr u64 align = 64ULL;
-            constexpr u64 mask = ~(align - 1ULL);
-            total_size_bytes += (new_size + align - 1) & mask;
-        };
-        gpu_modified_ranges.ForEachInRange(address, size, add_download);
-        gpu_modified_ranges.Subtract(address, size);
-    });
+        if (!item.copies.empty()) {
+            pending.push_back(std::move(item));
+        }
+    }
     if (total_size_bytes == 0) {
         return;
     }
     const auto download = staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached);
-    for (auto& copy : copies) {
-        copy.dstOffset += download.offset;
+    for (auto& item : pending) {
+        for (auto& copy : item.copies) {
+            copy.dstOffset += download.offset;
+        }
+        runtime.CopyBuffer(item.arena, download.buffer, item.copies);
     }
-    runtime.CopyBuffer(arena, download.buffer, copies);
+    Vulkan::g_sotc_download_count.fetch_add(1, std::memory_order_relaxed);
     scheduler.Finish();
 
     download.buffer->Invalidate(download.offset, download.size);
-    for (const auto& copy : copies) {
-        auto* dst_addr = std::bit_cast<u8*>(arena_base + copy.srcOffset);
-        memory->TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
-                                copy.size);
+    for (const auto& item : pending) {
+        for (const auto& copy : item.copies) {
+            auto* dst_addr = std::bit_cast<u8*>(item.arena->cpu_addr + copy.srcOffset);
+            memory->TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
+                                    copy.size);
+        }
+        memory_tracker->UnmarkRegionAsGpuModified(item.addr, item.size, false);
     }
-    memory_tracker->UnmarkRegionAsGpuModified(device_addr, size, false);
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,

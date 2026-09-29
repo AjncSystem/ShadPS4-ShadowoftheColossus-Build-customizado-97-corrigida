@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -9,6 +10,10 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 namespace Vulkan {
+
+std::atomic<u64> g_sotc_finish_count{0};
+std::atomic<u64> g_sotc_wait_us{0};
+std::atomic<u64> g_sotc_download_count{0};
 
 std::mutex Scheduler::submit_mutex;
 
@@ -116,6 +121,7 @@ void Scheduler::Flush() {
 
 void Scheduler::Finish() {
     // When finishing, we need to wait for the submission to have executed on the device.
+    g_sotc_finish_count.fetch_add(1, std::memory_order_relaxed);
     const u64 presubmit_tick = CurrentTick();
     SubmitInfo info{};
     SubmitExecution(info);
@@ -128,7 +134,12 @@ void Scheduler::Wait(u64 tick) {
         SubmitInfo info{};
         Flush(info);
     }
+    const auto wait_start = std::chrono::steady_clock::now();
     work_semaphore.Wait(tick);
+    g_sotc_wait_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - wait_start)
+                                 .count(),
+                             std::memory_order_relaxed);
 }
 
 void Scheduler::PopPendingOperations() {

@@ -1098,7 +1098,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - t0)
                                 .count();
-            LOG_CRITICAL(Render_Vulkan, "SOTCFRAME {} t={}ms", frames, ms);
+            LOG_CRITICAL(Render_Vulkan, "SOTCFRAME {} t={}ms finish={} downloads={} wait={}ms",
+                         frames, ms, g_sotc_finish_count.exchange(0),
+                         g_sotc_download_count.exchange(0), g_sotc_wait_us.exchange(0) / 1000);
         }
     }
 }
