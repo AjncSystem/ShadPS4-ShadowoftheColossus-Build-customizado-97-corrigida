@@ -9,6 +9,7 @@
 #include <csignal>
 #include <pthread.h>
 #endif
+#include "video_core/page_manager.h"
 #include "core/debug_state.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -321,6 +322,8 @@ int PS4_SYSV_ABI posix_pthread_create_name_np(PthreadT* thread, const PthreadAtt
         thread_state->Free(curthread, new_thread);
         return POSIX_EAGAIN;
     }
+    VideoCore::RegisterGuestStack(reinterpret_cast<VAddr>(new_thread->attr.stackaddr_attr),
+                                  new_thread->attr.stacksize_attr);
 
     /*
      * Write a magic value to the thread structure

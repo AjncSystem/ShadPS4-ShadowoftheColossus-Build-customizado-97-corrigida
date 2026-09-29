@@ -2,13 +2,24 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <utility>
+#include <boost/icl/interval_set.hpp>
+#include <mutex>
+#include <atomic>
+#include "common/alignment.h"
 #include "common/adaptive_mutex.h"
+#include "common/alignment.h"
 #include "common/assert.h"
+#include "common/alignment.h"
 #include "common/debug.h"
+#include "common/alignment.h"
 #include "common/div_ceil.h"
+#include "common/alignment.h"
 #include "common/error.h"
+#include "common/alignment.h"
 #include "common/multi_level_page_table.h"
+#include "common/alignment.h"
 #include "common/signal_context.h"
+#include "common/alignment.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -18,6 +29,7 @@
 
 #ifndef _WIN64
 #include <sys/mman.h>
+#include "common/alignment.h"
 #include "common/adaptive_mutex.h"
 #else
 #include <windows.h>
@@ -31,6 +43,7 @@
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #else
+#include "common/alignment.h"
 #include "common/spin_lock.h"
 #endif
 
@@ -39,6 +52,42 @@ void SotcRecordFault(u64 addr, bool is_write, bool gpu_thread);
 }
 
 namespace VideoCore {
+
+namespace {
+std::mutex g_guest_stacks_mutex;
+boost::icl::interval_set<VAddr> g_guest_stacks;
+} // namespace
+
+// The exception frame is written below the faulting stack pointer, so a nearly full stack also
+// needs the memory just under it to stay accessible.
+constexpr u64 GuestStackMargin = 16_KB;
+
+void RegisterGuestStack(VAddr address, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    address -= GuestStackMargin;
+    size += GuestStackMargin;
+    {
+        std::scoped_lock lk{g_guest_stacks_mutex};
+        g_guest_stacks += boost::icl::interval<VAddr>::right_open(address, address + size);
+    }
+    // Memory the guest hands over as a stack may already be tracked; make it accessible now.
+    const VAddr begin = Common::AlignDown(address, VAddr{4096});
+    const VAddr end = Common::AlignUp(address + size, VAddr{4096});
+    Core::Memory::Instance()->GetAddressSpace().Protect(begin, end - begin,
+                                                        Core::MemoryPermission::ReadWrite);
+}
+
+void UnregisterGuestStack(VAddr address, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    address -= GuestStackMargin;
+    size += GuestStackMargin;
+    std::scoped_lock lk{g_guest_stacks_mutex};
+    g_guest_stacks -= boost::icl::interval<VAddr>::right_open(address, address + size);
+}
 
 struct PageManager::Impl {
     struct PageState {
@@ -483,6 +532,26 @@ struct SignalImpl : public PageManager::Impl {
         auto& impl = memory->GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
+        if (perms != Core::MemoryPermission::ReadWrite) {
+            // Keep guest stacks accessible, only protect the rest of the range.
+            boost::icl::interval_set<VAddr> ranges;
+            ranges += boost::icl::interval<VAddr>::right_open(address, address + size);
+            {
+                std::scoped_lock lk{g_guest_stacks_mutex};
+                if (boost::icl::intersects(g_guest_stacks, ranges)) {
+                    ranges -= g_guest_stacks;
+                    static std::atomic<u32> reported{0};
+                    if (reported++ < 8) {
+                        LOG_ERROR(Render, "Not protecting guest stack pages in {:#x}+{:#x}",
+                                    address, size);
+                    }
+                }
+            }
+            for (const auto& range : ranges) {
+                impl.Protect(range.lower(), range.upper() - range.lower(), perms);
+            }
+            return;
+        }
         impl.Protect(address, size, perms);
     }
 

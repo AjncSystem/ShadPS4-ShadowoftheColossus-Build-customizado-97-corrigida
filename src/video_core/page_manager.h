@@ -15,6 +15,12 @@ class Rasterizer;
 
 namespace VideoCore {
 
+/// Guest thread and fiber stacks. The page tracker never makes them inaccessible: on Windows
+/// a fault whose exception frame cannot be written below the faulting stack pointer kills the
+/// process without running any handler.
+void RegisterGuestStack(VAddr address, u64 size);
+void UnregisterGuestStack(VAddr address, u64 size);
+
 struct UffdImpl;
 struct SignalImpl;
 

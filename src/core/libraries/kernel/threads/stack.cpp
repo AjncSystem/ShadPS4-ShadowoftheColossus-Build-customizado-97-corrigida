@@ -5,6 +5,7 @@
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/threads/thread_state.h"
 #include "core/memory.h"
+#include "video_core/page_manager.h"
 
 namespace Libraries::Kernel {
 
@@ -111,6 +112,7 @@ int ThreadState::CreateStack(PthreadAttr* attr) {
 
     stackaddr += guardsize;
     attr->stackaddr_attr = (void*)stackaddr;
+    VideoCore::RegisterGuestStack(stackaddr, stacksize);
 
     if (attr->stackaddr_attr != nullptr) {
         std::memset(attr->stackaddr_attr, 0, stacksize);
