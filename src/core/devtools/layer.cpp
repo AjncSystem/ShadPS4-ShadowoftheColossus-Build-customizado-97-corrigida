@@ -30,7 +30,7 @@ using namespace ::Core::Devtools;
 using L = ::Core::Devtools::Layer;
 
 static bool show_simple_fps = false;
-static bool visibility_toggled = false;
+static bool visibility_toggled = true; // place the FPS counter on first show
 static float fps_anchor_width = FLT_MAX;
 static bool show_quit_window = false;
 
@@ -424,13 +424,12 @@ void L::Draw() {
                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDecoration |
                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
             if (const float width = GetIO().DisplaySize.x; width != fps_anchor_width) {
-                visibility_toggled |= GetWindowPos().x + GetCurrentWindowRead()->SizeFull.x >=
-                                      fps_anchor_width - 1.0f;
+                visibility_toggled |= GetWindowPos().x <= 1.0f && GetWindowPos().y <= 1.0f;
                 fps_anchor_width = width;
             }
-            // Set window position to top left if it was toggled on
+            // Snap the FPS counter to the top left corner when it is shown
             if (visibility_toggled) {
-                SetWindowPos("Video Info", {999999.0f, 0.0f}, ImGuiCond_Always);
+                SetWindowPos("Video Info", {0.0f, 0.0f}, ImGuiCond_Always);
                 visibility_toggled = false;
             }
             if (BeginPopupContextWindow()) {
