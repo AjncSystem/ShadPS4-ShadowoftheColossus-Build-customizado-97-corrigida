@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <optional>
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
 #include <queue>
@@ -17,6 +18,7 @@
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/opcodes.h"
+#include "core/memory.h"
 #include "shader_recompiler/ir/passes/srt.h"
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/ir/reg.h"
@@ -47,6 +49,12 @@ static void EnsureSrtWalkerFaultHandler() {
 }
 
 namespace Shader {
+
+// Copies a window of guest memory from the backing pages, so neither unmapped nor
+// tracking-protected pages beyond the end of a table can fault inside the walker.
+void SrtCopyWindow(u32* dst, u64 src, u64 bytes) {
+    Core::Memory::Instance()->CopySparseMemory(src, reinterpret_cast<u8*>(dst), bytes);
+}
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     EnsureSrtWalkerFaultHandler();
@@ -218,6 +226,17 @@ static inline u16 GetFlatbufOffset(const IR::Inst* inst) {
         return inst->Flags<u16>();
     }
     UNREACHABLE_MSG("Instruction not supported");
+}
+
+/// Copies the flattened-buffer placement of a ReadConst, including the dynamic window flag.
+static inline void CopyFlatbufPlacement(IR::Inst* dst, const IR::Inst* src) {
+    if (src->GetOpcode() == IR::Opcode::ReadConst) {
+        dst->SetFlags(src->Flags<u32>());
+        return;
+    }
+    auto inst_info = dst->Flags<IR::BufferInstInfo>();
+    inst_info.flatbuf_off_dw.Assign(GetFlatbufOffset(src));
+    dst->SetFlags(inst_info);
 }
 
 static inline void SetFlatbufOffset(IR::Inst* inst, u16 offset) {
@@ -602,6 +621,32 @@ static inline void PopPtr(Xbyak::CodeGenerator& c) {
     c.pop(rdi);
 }
 
+// Emits a call to SrtCopyWindow(flat_dst + dst_off_dw, rdi, window size), preserving the
+// walker state (rdi = current table, rsi = flattened buffer, r12 = SrtCopyWindow).
+static void EmitCopyWindow(Xbyak::CodeGenerator& c, u32 dst_off_dw) {
+    c.push(rdi);
+    c.push(rsi);
+    c.push(rbx);
+    c.mov(rbx, rsp);
+    c.and_(rsp, ~15);
+#ifdef _WIN32
+    c.sub(rsp, 32); // Shadow space
+    c.lea(rcx, ptr[rsi + (dst_off_dw << 2)]);
+    c.mov(rdx, rdi);
+    c.mov(r8, u64{ReadConstDynamicWindowDwords} * sizeof(u32));
+#else
+    c.mov(rdx, u64{ReadConstDynamicWindowDwords} * sizeof(u32));
+    c.mov(rax, rdi);
+    c.lea(rdi, ptr[rsi + (dst_off_dw << 2)]);
+    c.mov(rsi, rax);
+#endif
+    c.call(r12); // SrtCopyWindow, passed in by the caller (the code is cached across builds)
+    c.mov(rsp, rbx);
+    c.pop(rbx);
+    c.pop(rsi);
+    c.pop(rdi);
+}
+
 static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& pass_info,
                          Xbyak::CodeGenerator& c) {
     if (subtree->GetOpcode() == IR::Opcode::ReadConst && subtree->Flags<u16>() == 0 ||
@@ -622,12 +667,24 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     // flattened buffer.
     // TODO src and dst are contiguous. Optimize with wider loads/stores
     // TODO if this subtree is dynamically indexed, don't compact it (keep it sparse)
+    std::optional<u32> dynamic_window;
     for (auto [src_off_dw, use] : *use_list) {
         if (src_off_dw.IsImmediate()) {
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
             if (!ComputeOffset(c, r10d, pass_info, src_off_dw)) {
-                LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+                if (use->GetOpcode() != IR::Opcode::ReadConst) {
+                    LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+                    continue;
+                }
+                // The index is only known while the shader runs (e.g. a loop counter): copy a
+                // window of the table so the shader can index it from the flattened buffer.
+                if (!dynamic_window) {
+                    dynamic_window = pass_info.dst_off_dw;
+                    EmitCopyWindow(c, pass_info.dst_off_dw);
+                    pass_info.dst_off_dw += ReadConstDynamicWindowDwords;
+                }
+                use->SetFlags(*dynamic_window | ReadConstDynamicWindowFlag);
                 continue;
             }
             c.shl(r10d, 2);
@@ -660,6 +717,9 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     EnsureSrtWalkerFaultHandler();
 
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
+    // Keep the copy helper (third argument) in a register the generated code does not use.
+    c.push(r12);
+    c.mov(r12, rdx);
     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
     ASSERT(pass_info.dst_off_dw == info.srt_info.flattened_bufsize_dw);
 
@@ -667,6 +727,7 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
         VisitPointer(IR::Value(static_cast<u32>(sgpr_base)), root, pass_info, c);
     }
 
+    c.pop(r12);
     c.ret();
     c.ready();
 
@@ -864,7 +925,7 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
     for (IR::Inst* readconst : all_readconsts) {
         ASSERT(pass_info.vn_to_inst.contains(pass_info.gvn_table.GetValueNumber(readconst)));
         IR::Inst* original = pass_info.DeduplicateInstruction(readconst);
-        SetFlatbufOffset(readconst, GetFlatbufOffset(original));
+        CopyFlatbufPlacement(readconst, original);
     }
 
     program.info.RefreshFlatBuf();
@@ -875,6 +936,10 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 #else
 
 namespace Shader {
+
+void SrtCopyWindow(u32* dst, u64 src, u64 bytes) {
+    Core::Memory::Instance()->CopySparseMemory(src, reinterpret_cast<u8*>(dst), bytes);
+}
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");

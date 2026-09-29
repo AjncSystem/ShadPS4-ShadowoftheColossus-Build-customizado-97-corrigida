@@ -13,7 +13,18 @@ struct Archive;
 
 namespace Shader {
 
-using PFN_SrtWalker = void PS4_SYSV_ABI (*)(const u32* /*user_data*/, u32* /*flat_dst*/);
+/// Host helper the walker calls to copy dynamic-index windows (see ReadConstDynamicWindowFlag).
+void SrtCopyWindow(u32* dst, u64 src, u64 bytes);
+using PFN_SrtCopyWindow = void (*)(u32*, u64, u64);
+
+using PFN_SrtWalker = void PS4_SYSV_ABI (*)(const u32* /*user_data*/, u32* /*flat_dst*/,
+                                            PFN_SrtCopyWindow /*copy_window*/);
+
+/// ReadConst flag marking a load whose dword index is only known at shader run time (e.g. a
+/// loop counter). The SRT walker copies a window of the pointed-to memory into the flattened
+/// buffer; the low bits hold the window's first dword and the index is clamped to its size.
+constexpr u32 ReadConstDynamicWindowFlag = 1u << 31;
+constexpr u32 ReadConstDynamicWindowDwords = 512;
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size);
 
 struct PersistentSrtInfo {

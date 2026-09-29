@@ -169,6 +169,12 @@ SharpLocation SharpLocationFromSource(const IR::Inst* inst) {
     } else if (inst->GetOpcode() == IR::Opcode::ReadConstBuffer) {
         location = inst->Flags<IR::BufferInstInfo>().flatbuf_off_dw;
     } else {
+        // A sharp fetched with a runtime index has no fixed place in the flattened buffer;
+        // the dynamic window only serves data loads.
+        if (inst->Flags<u32>() & ReadConstDynamicWindowFlag) {
+            LOG_WARNING(Render_Recompiler, "Sharp source uses a runtime index");
+            return UNKNOWN_LOCATION;
+        }
         location = inst->Flags<SharpLocation>();
     }
     if (location == 0) {
