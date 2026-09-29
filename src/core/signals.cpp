@@ -633,6 +633,39 @@ static bool SotcHandle(EXCEPTION_POINTERS* pExp) {
 
 static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
+    // DEBUG: report exceptions raised while this thread is already handling one. Written with
+    // WriteFile only, so it works even when the logger or the heap is the problem.
+    thread_local int handler_depth = 0;
+    struct DepthGuard {
+        int& depth;
+        ~DepthGuard() {
+            --depth;
+        }
+    } depth_guard{++handler_depth};
+    if (handler_depth >= 2 && pExp && pExp->ExceptionRecord && pExp->ContextRecord) {
+        char line[256];
+        ULONG_PTR low = 0, high = 0;
+        GetCurrentThreadStackLimits(&low, &high);
+        const int len = snprintf(
+            line, sizeof(line),
+            "NESTED-EXCEPTION depth=%d code=%08lx at=%p rip=%llx rsp=%llx fault=%llx "
+            "stack=[%llx,%llx) tid=%lu\n",
+            handler_depth, pExp->ExceptionRecord->ExceptionCode,
+            pExp->ExceptionRecord->ExceptionAddress, pExp->ContextRecord->Rip,
+            pExp->ContextRecord->Rsp,
+            pExp->ExceptionRecord->NumberParameters > 1
+                ? static_cast<unsigned long long>(pExp->ExceptionRecord->ExceptionInformation[1])
+                : 0ULL,
+            static_cast<unsigned long long>(low), static_cast<unsigned long long>(high),
+            GetCurrentThreadId());
+        DWORD written = 0;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, static_cast<DWORD>(len), &written,
+                  nullptr);
+        if (handler_depth >= 8) {
+            // Give up instead of recursing until the stack is gone.
+            TerminateProcess(GetCurrentProcess(), 0xDEAD0001);
+        }
+    }
     if (pExp != nullptr && pExp->ExceptionRecord != nullptr && SotcHandle(pExp)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
