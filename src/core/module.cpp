@@ -128,7 +128,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
         memory->MapMemory(out_addr, load_base, aligned_base_size + TrampolineSize,
                           MemoryProt::NoAccess, MemoryMapFlags::NoFlags, VMAType::Reserved, name);
     ASSERT_MSG(result == ORBIS_OK, "Failed to reserve memory for module {}", name);
-    LOG_INFO(Core_Linker, "Loading module {} to {}", name, fmt::ptr(*out_addr));
+    LOG_CRITICAL(Core_Linker, "Loading module {} to {}", name, fmt::ptr(*out_addr)); // DEBUG
 
 #ifdef ARCH_X86_64
     // Initialize trampoline generator.

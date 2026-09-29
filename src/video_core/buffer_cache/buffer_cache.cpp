@@ -153,9 +153,11 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     // frame, one after another, so while the GPU is idle anyway also bring along the other
     // regions read back recently ("hot" readbacks) that the GPU has modified since. The reads
     // that follow then find their data already on the CPU instead of each needing a sync.
+    // Opt-in (SOTC_RB_HOT=1): batching unrelated regions into one readback still loses the
+    // device on some scene transitions (WriteInvalid), and the arena-local variant saves little.
     static const bool hot_enabled = [] {
         const char* v = std::getenv("SOTC_RB_HOT");
-        return !v || v[0] != '0';
+        return v && v[0] == '1';
     }();
     const auto now = std::chrono::steady_clock::now();
     struct Region {
@@ -176,9 +178,13 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
             if (now - hot.last_request > HotReadbackLifetime) {
                 continue;
             }
-            const u64 first_block = hot.addr >> block_shift;
-            const u64 last_block = (hot.addr + hot.size - 1) >> block_shift;
-            regions.push_back({GetArena(first_block, last_block), hot.addr, hot.size});
+            // Stay inside the arena of this readback: never create or migrate arenas here.
+            const u64 first_page = hot.addr >> ARENA_PAGE_BITS;
+            const u64 last_page = (hot.addr + hot.size - 1) >> ARENA_PAGE_BITS;
+            if (address_space[first_page] != arena || address_space[last_page] != arena) {
+                continue;
+            }
+            regions.push_back({arena, hot.addr, hot.size});
         }
         if (!known) {
             if (hot_readbacks.size() < MaxHotReadbacks) {
@@ -200,30 +206,63 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     u64 total_size_bytes = 0;
     for (const Region& region : regions) {
         Pending item{region.arena, region.addr, region.size, {}};
+        const u64 total_before = total_size_bytes;
         const VAddr arena_base = region.arena->cpu_addr;
         memory_tracker->ForEachDownloadRange<false>(
             region.addr, region.size, [&](u64 address, u64 range_size) {
                 const auto add_download = [&](VAddr start, VAddr end) {
-                    item.copies.push_back(vk::BufferCopy{
-                        .srcOffset = start - arena_base,
-                        .dstOffset = total_size_bytes,
-                        .size = end - start,
-                    });
-                    // Align up to avoid cache conflicts
-                    constexpr u64 align = 64ULL;
-                    total_size_bytes += Common::AlignUp(end - start, align);
+                    // Only copy what is still bound; a released range must never be read.
+                    resident_ranges.ForEachInRange(
+                        start >> block_shift, ((end - 1) >> block_shift) + 1,
+                        [&](const Backing& backing) {
+                            const VAddr a = std::max<VAddr>(start, backing.start << block_shift);
+                            const VAddr b = std::min<VAddr>(end, backing.end << block_shift);
+                            if (a >= b) {
+                                return;
+                            }
+                            item.copies.push_back(vk::BufferCopy{
+                                .srcOffset = a - arena_base,
+                                .dstOffset = total_size_bytes,
+                                .size = b - a,
+                            });
+                            // Align up to avoid cache conflicts
+                            constexpr u64 align = 64ULL;
+                            total_size_bytes += Common::AlignUp(b - a, align);
+                        });
                 };
                 gpu_modified_ranges.ForEachInRange(address, range_size, add_download);
                 gpu_modified_ranges.Subtract(address, range_size);
             });
-        if (!item.copies.empty()) {
-            pending.push_back(std::move(item));
+        if (item.copies.empty()) {
+            continue;
         }
+        // Large modified regions (render targets and the like) are left to their own readback.
+        constexpr u64 MaxHotBytes = 64_KB;
+        u64 item_bytes = 0;
+        for (const auto& copy : item.copies) {
+            item_bytes += copy.size;
+        }
+        if (!pending.empty() && item_bytes > MaxHotBytes) {
+            // Not downloaded now: give the range back to the modified set.
+            for (const auto& copy : item.copies) {
+                gpu_modified_ranges.Add(arena_base + copy.srcOffset, copy.size);
+            }
+            total_size_bytes = total_before;
+            continue;
+        }
+        pending.push_back(std::move(item));
     }
     if (total_size_bytes == 0) {
         return;
     }
     const auto download = staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached);
+    if (pending.size() > 1) { // DEBUG
+        static u32 reported = 0;
+        if (reported++ < 40) {
+            LOG_CRITICAL(Render, "SOTCHOT regions={} bytes={} staging_off={:#x}", pending.size(),
+                         total_size_bytes, download.offset);
+        }
+    }
     for (auto& item : pending) {
         for (auto& copy : item.copies) {
             copy.dstOffset += download.offset;
@@ -324,6 +363,9 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
                                      num_pages << ARENA_PAGE_BITS, MemoryType::Sparse);
             address_space[first_page] = new_arena;
             address_space[last_page] = new_arena;
+            LOG_CRITICAL(Render, "SOTCARENA new cpu={:#x} size={:#x} bda={:#x}", // DEBUG
+                         new_arena->cpu_addr, new_arena->size_bytes,
+                         new_arena->BufferDeviceAddress());
         }
         return address_space[first_page];
     }
@@ -338,6 +380,8 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 total_size = first_size + last_size;
     const u64 end_block = (first_addr + total_size) >> block_shift;
     auto* new_arena = &arenas.emplace_back(instance, first_addr, total_size, MemoryType::Sparse);
+    LOG_CRITICAL(Render, "SOTCARENA migrate cpu={:#x} size={:#x} bda={:#x}", // DEBUG
+                 new_arena->cpu_addr, new_arena->size_bytes, new_arena->BufferDeviceAddress());
     auto* bind = BindsForArena(new_arena);
     resident_ranges.ForEachInRange(base_block, end_block, [&](const Backing& backing) {
         const u64 start = std::max(base_block, backing.start);
@@ -512,6 +556,10 @@ void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
     if (released.empty()) {
         return;
     }
+    // Work recorded before the unmap may still write this memory, and sparse binds are not
+    // ordered against earlier submissions: finish that work before unbinding, or the GPU
+    // writes to unbound memory (WriteInvalid, device lost). Unmaps are rare, the sync is cheap.
+    scheduler.Finish();
     u64 freed_bytes = 0;
     for (const Backing& range : released) {
         // Split at arena page boundaries, each page may belong to a different arena.
@@ -546,6 +594,10 @@ void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
         }
         freed_bytes += (range.end - range.start) << block_shift;
     }
+    std::erase_if(hot_readbacks, [&](const HotReadback& hot) {
+        return hot.addr < (end_block << block_shift) &&
+               (first_block << block_shift) < hot.addr + hot.size;
+    });
     resident_ranges.Subtract(first_block, end_block);
     sync_batch.Subtract(first_block << block_shift, end_block << block_shift);
     gpu_modified_ranges.Subtract(first_block << block_shift,

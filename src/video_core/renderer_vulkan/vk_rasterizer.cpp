@@ -1773,7 +1773,13 @@ void Rasterizer::RegisterMemory(VAddr addr, u64 size) {
 void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
     buffer_cache.InvalidateMemory(addr, size);
     // Give the arena memory back; it runs on the GPU thread, ordered before later draws.
-    liverpool->SendCommand<false>([this, addr, size] { buffer_cache.ReleaseMemory(addr, size); });
+    // Releasing arena memory on unmap still races with in-flight GPU work during loads
+    // (device lost, silent crashes loading a save), so it is opt-in for now.
+    static const bool release_enabled = std::getenv("SOTC_ARENA_RELEASE") != nullptr;
+    if (release_enabled) {
+        liverpool->SendCommand<false>(
+            [this, addr, size] { buffer_cache.ReleaseMemory(addr, size); });
+    }
     texture_cache.UnmapMemory(addr, size);
     {
         std::scoped_lock lock{mapped_ranges_mutex};
