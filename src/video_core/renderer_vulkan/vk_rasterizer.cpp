@@ -1257,7 +1257,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
-            if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
+            if (vsharp.base_address == 0 || vsharp.GetSize() == 0 ||
+                !memory->IsValidMapping(vsharp.base_address)) {
+                // Unmapped addresses show up in descriptors of bindings the shader does not use
+                // (garbage left in the guest's descriptor memory); bind nothing instead of aborting.
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
                 u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());

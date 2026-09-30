@@ -938,6 +938,30 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers(addr, size, PageOp::Untrack);
 }
 
+void TextureCache::EmergencyCollect() {
+    std::scoped_lock lock{mutex};
+    size_t num_deletions = 512;
+    size_t freed = 0;
+    const u64 ticks = std::min<u64>(4, gc_tick);
+    lru_cache.ForEachItemBelow(gc_tick - ticks, [&](ImageId image_id) {
+        if (num_deletions == 0) {
+            return true;
+        }
+        auto& image = slot_images[image_id];
+        if (image.SafeToDownload()) {
+            if (image.info.IsTiled()) {
+                return false; // Can't download non-linear images yet
+            }
+            DownloadImageMemory(image_id);
+        }
+        FreeImage(image_id);
+        --num_deletions;
+        ++freed;
+        return false;
+    });
+    LOG_WARNING(Render, "Emergency texture collection freed {} images", freed);
+}
+
 void TextureCache::GarbageCollectImages() {
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();

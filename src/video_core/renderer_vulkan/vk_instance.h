@@ -469,6 +469,9 @@ public:
     void ReportDeviceFault() const;
 
     /// True when VK_NV_device_diagnostic_checkpoints is enabled.
+    /// DEBUG: prints the last GPU checkpoints reached (NV extension) to stderr.
+    void DumpCheckpointsToStderr() const;
+
     [[nodiscard]] bool IsNvCheckpointsEnabled() const {
         return nv_checkpoints;
     }

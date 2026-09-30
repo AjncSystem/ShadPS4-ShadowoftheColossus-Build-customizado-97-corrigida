@@ -28,6 +28,7 @@ namespace Vulkan {
 extern std::atomic<u64> g_sotc_finish_count;
 extern std::atomic<u64> g_sotc_wait_us;
 extern std::atomic<u64> g_sotc_download_count;
+void DumpRecentSubmits(vk::Device device, u64 stuck_tick);
 
 class Instance;
 

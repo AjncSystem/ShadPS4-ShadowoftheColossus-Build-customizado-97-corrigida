@@ -90,6 +90,10 @@ public:
         return tile_manager;
     }
 
+    /// Frees cached images not used in the last few frames, regardless of memory thresholds.
+    /// Called when a video memory allocation fails.
+    void EmergencyCollect();
+
     /// Invalidates any image in the logical page range.
     void InvalidateMemory(VAddr addr, size_t size);
 

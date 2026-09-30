@@ -10,6 +10,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/assert.h"
+#include "common/elf_info.h"
 #include "common/func_traits.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
@@ -163,6 +164,11 @@ static u32 LoopIterationBudget() {
     static const u32 budget = [] {
         if (const char* value = std::getenv("SHADPS4_LOOP_LIMIT")) {
             return static_cast<u32>(std::strtoul(value, nullptr, 0));
+        }
+        // Shadow of the Colossus runs away in some loops right after its intro video is skipped
+        // (stale data); a lower budget turns multi-second GPU stalls into a short hitch.
+        if (Common::ElfInfo::Instance().GameSerial() == "CUSA08809") {
+            return 1U << 13;
         }
         return 1U << 18;
     }();

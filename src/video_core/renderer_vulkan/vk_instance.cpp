@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include <mutex>
 #include <array>
 #include <string>
@@ -231,6 +232,30 @@ static std::string CheckpointName(u64 marker) {
 }
 
 void DumpSotcCaptures(); // DEBUG, defined in vk_rasterizer.cpp
+
+void Instance::DumpCheckpointsToStderr() const {
+    if (!nv_checkpoints) {
+        return;
+    }
+    u32 count = 0;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count, nullptr);
+    std::vector<VkCheckpointDataNV> data(count, {VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV});
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count,
+                                                             data.data());
+    for (const auto& cp : data) {
+        const u64 marker = reinterpret_cast<u64>(cp.pCheckpointMarker);
+        std::fprintf(stderr, "  checkpoint stage=%s marker=%llu : %s\n",
+                     vk::to_string(static_cast<vk::PipelineStageFlagBits>(cp.stage)).c_str(),
+                     static_cast<unsigned long long>(marker), CheckpointName(marker).c_str());
+        if (cp.stage == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) {
+            for (u64 next = marker + 1; next <= marker + 3; ++next) {
+                std::fprintf(stderr, "    following marker=%llu : %s\n",
+                             static_cast<unsigned long long>(next), CheckpointName(next).c_str());
+            }
+        }
+    }
+    std::fflush(stderr);
+}
 
 void Instance::ReportDeviceFault() const {
     LOG_CRITICAL(Render_Vulkan, "Vulkan device lost");

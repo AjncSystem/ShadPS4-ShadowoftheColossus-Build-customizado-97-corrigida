@@ -155,10 +155,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     // that follow then find their data already on the CPU instead of each needing a sync.
     // Opt-in (SOTC_RB_HOT=1): batching unrelated regions into one readback still loses the
     // device on some scene transitions (WriteInvalid), and the arena-local variant saves little.
-    static const bool hot_enabled = [] {
+    // SOTC_RB_HOT=1: same arena, small regions only. SOTC_RB_HOT=2: any existing arena, any size.
+    static const int hot_mode = [] {
         const char* v = std::getenv("SOTC_RB_HOT");
-        return v && v[0] == '1';
+        return v ? std::atoi(v) : 0;
     }();
+    const bool hot_enabled = hot_mode != 0;
     const auto now = std::chrono::steady_clock::now();
     struct Region {
         const Buffer* arena;
@@ -181,10 +183,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
             // Stay inside the arena of this readback: never create or migrate arenas here.
             const u64 first_page = hot.addr >> ARENA_PAGE_BITS;
             const u64 last_page = (hot.addr + hot.size - 1) >> ARENA_PAGE_BITS;
-            if (address_space[first_page] != arena || address_space[last_page] != arena) {
+            const Buffer* hot_arena = address_space[first_page];
+            if (!hot_arena || address_space[last_page] != hot_arena ||
+                (hot_mode == 1 && hot_arena != arena)) {
                 continue;
             }
-            regions.push_back({arena, hot.addr, hot.size});
+            regions.push_back({hot_arena, hot.addr, hot.size});
         }
         if (!known) {
             if (hot_readbacks.size() < MaxHotReadbacks) {
@@ -242,7 +246,7 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         for (const auto& copy : item.copies) {
             item_bytes += copy.size;
         }
-        if (!pending.empty() && item_bytes > MaxHotBytes) {
+        if (hot_mode == 1 && !pending.empty() && item_bytes > MaxHotBytes) {
             // Not downloaded now: give the range back to the modified set.
             for (const auto& copy : item.copies) {
                 gpu_modified_ranges.Add(arena_base + copy.srcOffset, copy.size);
@@ -430,6 +434,18 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             LOG_WARNING(Render, "Video memory exhausted, placing new buffer memory in system RAM");
         }
         alloc_info.memoryTypeIndex = *arena_fallback_memory_type_index;
+        const auto retry = instance.GetDevice().allocateMemory(alloc_info);
+        alloc_result = retry.result;
+        device_memory = retry.value;
+    }
+    if (alloc_result == vk::Result::eErrorOutOfDeviceMemory) {
+        // Video memory is full (sparse arenas cannot use system memory). Drop old cached images,
+        // wait for the GPU so their memory is really released, and try once more.
+        LOG_WARNING(Render, "Video memory exhausted, collecting cached images");
+        texture_cache.EmergencyCollect();
+        scheduler.Finish();
+        scheduler.PopPendingOperations();
+        alloc_info.memoryTypeIndex = arena_memory_type_index;
         const auto retry = instance.GetDevice().allocateMemory(alloc_info);
         alloc_result = retry.result;
         device_memory = retry.value;

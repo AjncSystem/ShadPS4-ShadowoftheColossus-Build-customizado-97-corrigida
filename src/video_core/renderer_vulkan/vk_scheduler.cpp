@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cstdio>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -14,6 +15,40 @@ namespace Vulkan {
 std::atomic<u64> g_sotc_finish_count{0};
 std::atomic<u64> g_sotc_wait_us{0};
 std::atomic<u64> g_sotc_download_count{0};
+
+// DEBUG: recent queue submissions, dumped when a GPU wait takes too long.
+struct SubmitRecord {
+    u64 signal_tick;
+    u32 num_waits;
+    VkSemaphore wait_semas[4];
+    u64 wait_ticks[4];
+    VkSemaphore signal_sema;
+};
+static std::array<SubmitRecord, 64> g_submit_ring{};
+static std::atomic<u32> g_submit_next{0};
+
+void DumpRecentSubmits(vk::Device device, u64 stuck_tick) {
+    const u32 end = g_submit_next.load();
+    for (u32 i = end > 12 ? end - 12 : 0; i < end; ++i) {
+        const SubmitRecord& r = g_submit_ring[i % g_submit_ring.size()];
+        char line[512];
+        int len = std::snprintf(line, sizeof(line), "  submit tick=%llu sem=%p waits=%u%s",
+                                static_cast<unsigned long long>(r.signal_tick),
+                                static_cast<void*>(r.signal_sema), r.num_waits,
+                                r.signal_tick == stuck_tick ? "  <== stuck" : "");
+        for (u32 w = 0; w < r.num_waits && w < 4; ++w) {
+            u64 value = 0;
+            const auto res = device.getSemaphoreCounterValue(r.wait_semas[w], &value);
+            len += std::snprintf(line + len, sizeof(line) - len, " [%p wait %llu now %llu%s]",
+                                 static_cast<void*>(r.wait_semas[w]),
+                                 static_cast<unsigned long long>(r.wait_ticks[w]),
+                                 static_cast<unsigned long long>(value),
+                                 res == vk::Result::eSuccess ? "" : " binary?");
+        }
+        std::fprintf(stderr, "%s\n", line);
+    }
+    std::fflush(stderr);
+}
 
 std::mutex Scheduler::submit_mutex;
 
@@ -224,6 +259,16 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
+    {
+        SubmitRecord& rec = g_submit_ring[g_submit_next.fetch_add(1) % g_submit_ring.size()];
+        rec.signal_tick = signal_value;
+        rec.signal_sema = static_cast<VkSemaphore>(timeline);
+        rec.num_waits = info.num_wait_semas;
+        for (u32 w = 0; w < info.num_wait_semas && w < 4; ++w) {
+            rec.wait_semas[w] = static_cast<VkSemaphore>(info.wait_semas[w]);
+            rec.wait_ticks[w] = info.wait_ticks[w];
+        }
+    }
 
     // One stage mask per wait semaphore; SubmitInfo can carry up to 4 waits (it used to provide
     // only 2 masks, so a third/fourth wait read past the array).

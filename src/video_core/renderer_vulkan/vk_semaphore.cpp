@@ -4,6 +4,7 @@
 #include <limits>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <cstdio>
 
 #include "common/assert.h"
@@ -89,6 +90,8 @@ void Semaphore::Wait(u64 tick) {
                                               0ul);
                 std::fwrite(line, 1, static_cast<size_t>(len), stderr);
                 std::fflush(stderr);
+                DumpRecentSubmits(instance.GetDevice(), tick);
+                instance.DumpCheckpointsToStderr();
 #endif
             }
             continue;
