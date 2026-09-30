@@ -101,6 +101,13 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         VkBuffer unsafe_buffer{};
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
+        if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+            // Same as images: going over the video memory budget beats aborting.
+            VmaAllocationCreateInfo over_budget_ci = alloc_ci;
+            over_budget_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+            result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &over_budget_ci,
+                                     &unsafe_buffer, &allocation, out_alloc_info);
+        }
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {}",
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};

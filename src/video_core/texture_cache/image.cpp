@@ -117,6 +117,18 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        // Over the video memory budget (loading screens peak before the cache collects old
+        // images). Going over budget lets the driver page memory out instead of aborting.
+        static bool warned = false;
+        if (!std::exchange(warned, true)) {
+            LOG_WARNING(Render_Vulkan, "Video memory budget exceeded, allocating images past it");
+        }
+        VmaAllocationCreateInfo over_budget_ci = alloc_ci;
+        over_budget_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &over_budget_ci, &unsafe_image,
+                                &allocation, &alloc_info);
+    }
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};
