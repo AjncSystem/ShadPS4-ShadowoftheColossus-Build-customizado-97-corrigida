@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <utility>
+#include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_set.hpp>
 #include <mutex>
 #include <atomic>
@@ -55,7 +56,9 @@ namespace VideoCore {
 
 namespace {
 std::mutex g_guest_stacks_mutex;
-boost::icl::interval_set<VAddr> g_guest_stacks;
+// Reference counted: the margin below one stack often covers a neighbouring stack (games pack
+// fiber stacks back to back), so finalizing one must not drop the other's protection.
+boost::icl::interval_map<VAddr, u32> g_guest_stacks;
 } // namespace
 
 // The exception frame is written below the faulting stack pointer, so a nearly full stack also
@@ -70,7 +73,8 @@ void RegisterGuestStack(VAddr address, u64 size) {
     size += GuestStackMargin;
     {
         std::scoped_lock lk{g_guest_stacks_mutex};
-        g_guest_stacks += boost::icl::interval<VAddr>::right_open(address, address + size);
+        g_guest_stacks +=
+            std::make_pair(boost::icl::interval<VAddr>::right_open(address, address + size), 1u);
     }
     // Memory the guest hands over as a stack may already be tracked; make it accessible now.
     const VAddr begin = Common::AlignDown(address, VAddr{4096});
@@ -86,7 +90,8 @@ void UnregisterGuestStack(VAddr address, u64 size) {
     address -= GuestStackMargin;
     size += GuestStackMargin;
     std::scoped_lock lk{g_guest_stacks_mutex};
-    g_guest_stacks -= boost::icl::interval<VAddr>::right_open(address, address + size);
+    g_guest_stacks -=
+        std::make_pair(boost::icl::interval<VAddr>::right_open(address, address + size), 1u);
 }
 
 struct PageManager::Impl {
@@ -538,8 +543,12 @@ struct SignalImpl : public PageManager::Impl {
             ranges += boost::icl::interval<VAddr>::right_open(address, address + size);
             {
                 std::scoped_lock lk{g_guest_stacks_mutex};
-                if (boost::icl::intersects(g_guest_stacks, ranges)) {
-                    ranges -= g_guest_stacks;
+                const auto window = boost::icl::interval<VAddr>::right_open(address, address + size);
+                const auto [first, last] = g_guest_stacks.equal_range(window);
+                if (first != last) {
+                    for (auto it = first; it != last; ++it) {
+                        ranges -= it->first;
+                    }
                     static std::atomic<u32> reported{0};
                     if (reported++ < 8) {
                         LOG_ERROR(Render, "Not protecting guest stack pages in {:#x}+{:#x}",

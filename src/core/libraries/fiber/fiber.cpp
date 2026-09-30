@@ -10,6 +10,11 @@
 #include "core/libraries/libs.h"
 #include "core/tls.h"
 
+#ifdef _WIN32
+#include <atomic>
+#include <windows.h>
+#endif
+
 namespace Libraries::Fiber {
 
 static constexpr u32 kFiberSignature0 = 0xdef1649c;
@@ -26,6 +31,32 @@ OrbisFiberContext* GetFiberContext() {
 
 extern "C" s32 PS4_SYSV_ABI _sceFiberSetJmp(OrbisFiberContext* ctx) asm("_sceFiberSetJmp");
 extern "C" s32 PS4_SYSV_ABI _sceFiberLongJmp(OrbisFiberContext* ctx) asm("_sceFiberLongJmp");
+
+// Long jumps land on a saved stack pointer and immediately write the return address there. If
+// that page was protected meanwhile (GPU page tracking over memory the game uses as a fiber or
+// thread stack), the write faults and Windows cannot even deliver the exception on that stack:
+// the process dies silently. Make sure the landing zone is writable before jumping.
+static void EnsureStackWritable(u64 rsp) {
+#ifdef _WIN32
+    static constexpr u64 Below = 32_KB; // exception frames and the fault handler need room
+    MEMORY_BASIC_INFORMATION mbi{};
+    const u64 probe = (rsp - 8) & ~u64{0xFFF};
+    bool writable = false;
+    if (VirtualQuery(reinterpret_cast<void*>(probe), &mbi, sizeof(mbi)) != 0) {
+        writable = mbi.State == MEM_COMMIT &&
+                   (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) != 0 &&
+                   (mbi.Protect & PAGE_GUARD) == 0;
+    }
+    if (writable) {
+        return;
+    }
+    static std::atomic<u32> reported{0};
+    if (reported++ < 16) {
+        LOG_ERROR(Lib_Fiber, "Stack page at {:#x} was not writable, re-registering it", probe);
+    }
+    VideoCore::RegisterGuestStack(probe + 0x1000 - Below, Below);
+#endif
+}
 extern "C" void PS4_SYSV_ABI _sceFiberSwitchEntry(OrbisFiberData* data,
                                                   bool set_fpu) asm("_sceFiberSwitchEntry");
 extern "C" void PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) asm("_sceFiberForceQuit");
@@ -33,6 +64,7 @@ extern "C" void PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) asm("_sceFiberForceQuit
 extern "C" void __attribute__((used)) PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) {
     OrbisFiberContext* g_ctx = GetFiberContext();
     g_ctx->return_val = ret;
+    EnsureStackWritable(g_ctx->rsp);
     _sceFiberLongJmp(g_ctx);
 }
 
@@ -85,6 +117,7 @@ void PS4_SYSV_ABI _sceFiberSwitchToFiber(OrbisFiber* fiber, u64 arg_on_run_to,
     OrbisFiberContext* fiber_ctx = fiber->context;
     if (fiber_ctx) {
         ctx->arg_on_run_to = arg_on_run_to;
+        EnsureStackWritable(fiber_ctx->rsp);
         _sceFiberLongJmp(fiber_ctx);
         __builtin_trap();
     }
@@ -102,6 +135,7 @@ void PS4_SYSV_ABI _sceFiberSwitchToFiber(OrbisFiber* fiber, u64 arg_on_run_to,
     data.arg_on_initialize = fiber->arg_on_initialize;
     data.arg_on_run_to = arg_on_run_to;
     data.stack_addr = reinterpret_cast<u8*>(fiber->addr_context) + fiber->size_context;
+    EnsureStackWritable(reinterpret_cast<u64>(data.stack_addr));
     if (fiber->flags & FiberFlags::SetFpuRegs) {
         data.fpucw = 0x037f;
         data.mxcsr = 0x9fc0;
@@ -128,6 +162,7 @@ void PS4_SYSV_ABI _sceFiberSwitch(OrbisFiber* cur_fiber, OrbisFiber* fiber, u64 
         data.stack_addr = reinterpret_cast<void*>(ctx->rsp & ~15);
         data.state = reinterpret_cast<u32*>(&cur_fiber->state);
 
+        EnsureStackWritable(reinterpret_cast<u64>(data.stack_addr));
         if (fiber->flags & FiberFlags::SetFpuRegs) {
             data.fpucw = 0x037f;
             data.mxcsr = 0x9fc0;
@@ -145,6 +180,7 @@ void PS4_SYSV_ABI _sceFiberSwitch(OrbisFiber* cur_fiber, OrbisFiber* fiber, u64 
 
 void PS4_SYSV_ABI _sceFiberTerminate(OrbisFiber* fiber, u64 arg_on_return, OrbisFiberContext* ctx) {
     ctx->arg_on_return = arg_on_return;
+    EnsureStackWritable(ctx->rsp);
     _sceFiberLongJmp(ctx);
     __builtin_trap();
 }
@@ -316,6 +352,7 @@ s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size
         data.arg_on_run_to = arg_on_run_to;
         data.stack_addr = reinterpret_cast<void*>(ctx.rsp & ~15);
         data.state = nullptr;
+        EnsureStackWritable(reinterpret_cast<u64>(data.stack_addr));
         if (fiber->flags & FiberFlags::SetFpuRegs) {
             data.fpucw = 0x037f;
             data.mxcsr = 0x9fc0;
