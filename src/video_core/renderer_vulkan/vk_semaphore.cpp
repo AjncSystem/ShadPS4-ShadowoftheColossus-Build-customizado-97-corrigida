@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
 #include <limits>
+#include <immintrin.h>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -55,6 +58,25 @@ void Semaphore::Wait(u64 tick) {
     Refresh();
     if (IsFree(tick)) {
         return;
+    }
+    // Short waits (readbacks) finish before a sleeping wait would even wake up: poll briefly
+    // first. Idea from Pink-shadPS4 (luizgustavs). SOTC_WAIT_SPIN_US sets the budget, 0 = off.
+    static const u64 spin_us = [] {
+        const char* v = std::getenv("SOTC_WAIT_SPIN_US");
+        return v ? std::strtoull(v, nullptr, 10) : u64{0};
+    }();
+    if (spin_us != 0) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::microseconds(spin_us);
+        do {
+            for (int i = 0; i < 32; ++i) {
+                _mm_pause();
+            }
+            Refresh();
+            if (IsFree(tick)) {
+                return;
+            }
+        } while (std::chrono::steady_clock::now() < deadline);
     }
 
     // If none of the above is hit, fallback to a regular wait

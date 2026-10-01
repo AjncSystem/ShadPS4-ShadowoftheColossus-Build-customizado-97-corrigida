@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -15,6 +16,14 @@ namespace Vulkan {
 std::atomic<u64> g_sotc_finish_count{0};
 std::atomic<u64> g_sotc_wait_us{0};
 std::atomic<u64> g_sotc_download_count{0};
+std::atomic<u64> g_sotc_rb_current{0};
+std::atomic<u64> g_sotc_rb_old_busy{0};
+std::atomic<u64> g_sotc_rb_old_idle{0};
+std::atomic<u64> g_sotc_rb_gpu_thread{0};
+std::atomic<u64> g_sotc_rb_guest_thread{0};
+std::atomic<u64> g_sotc_rb_clean{0};
+std::atomic<u64> g_sotc_clean_loads{0};
+std::atomic<u64> g_sotc_clean_fast{0};
 
 // DEBUG: recent queue submissions, dumped when a GPU wait takes too long.
 struct SubmitRecord {
@@ -175,6 +184,77 @@ void Scheduler::Wait(u64 tick) {
                                  std::chrono::steady_clock::now() - wait_start)
                                  .count(),
                              std::memory_order_relaxed);
+}
+
+vk::CommandBuffer Scheduler::BeginAhead() {
+    // Idea from the readback ahead of Pink-shadPS4 (luizgustavs), on the graphics queue only.
+    const vk::Device device = instance.GetDevice();
+    if (!ahead_pool) {
+        const vk::CommandPoolCreateInfo pool_info = {
+            .flags = vk::CommandPoolCreateFlagBits::eTransient |
+                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = instance.GetGraphicsQueueFamilyIndex(),
+        };
+        auto [pool_result, pool] = device.createCommandPoolUnique(pool_info);
+        ASSERT_MSG(pool_result == vk::Result::eSuccess, "Failed to create the ahead pool: {}",
+                   vk::to_string(pool_result));
+        ahead_pool = std::move(pool);
+        const vk::CommandBufferAllocateInfo alloc_info = {
+            .commandPool = *ahead_pool,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1,
+        };
+        auto [alloc_result, cmdbufs] = device.allocateCommandBuffers(alloc_info);
+        ASSERT_MSG(alloc_result == vk::Result::eSuccess,
+                   "Failed to allocate the ahead command buffer: {}", vk::to_string(alloc_result));
+        ahead_cmdbuf = cmdbufs[0];
+        auto [fence_result, fence] = device.createFenceUnique({});
+        ASSERT_MSG(fence_result == vk::Result::eSuccess, "Failed to create the ahead fence: {}",
+                   vk::to_string(fence_result));
+        ahead_fence = std::move(fence);
+    } else {
+        Check(device.resetFences(*ahead_fence));
+    }
+    Check(ahead_cmdbuf.reset());
+    Check(ahead_cmdbuf.begin(vk::CommandBufferBeginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    }));
+    return ahead_cmdbuf;
+}
+
+void Scheduler::SubmitAheadAndWait() {
+    Check(ahead_cmdbuf.end());
+    // Queue submission order and the barriers recorded in the command buffer order it after
+    // all work submitted before; the command buffer being recorded is not involved.
+    const vk::SubmitInfo submit_info = {
+        .commandBufferCount = 1U,
+        .pCommandBuffers = &ahead_cmdbuf,
+    };
+    {
+        std::scoped_lock lk{submit_mutex};
+        const auto submit_result = instance.GetGraphicsQueue().submit(submit_info, *ahead_fence);
+        if (submit_result == vk::Result::eErrorDeviceLost) {
+            instance.ReportDeviceFault();
+            UNREACHABLE_MSG("Device lost during ahead submit");
+        }
+        ASSERT_MSG(submit_result == vk::Result::eSuccess, "Ahead submit failed: {}",
+                   vk::to_string(submit_result));
+    }
+    const auto wait_start = std::chrono::steady_clock::now();
+    const auto wait_result =
+        instance.GetDevice().waitForFences(*ahead_fence, true, std::numeric_limits<u64>::max());
+    if (wait_result == vk::Result::eErrorDeviceLost) {
+        instance.ReportDeviceFault();
+        UNREACHABLE_MSG("Device lost during ahead wait");
+    }
+    ASSERT_MSG(wait_result == vk::Result::eSuccess, "Ahead wait failed: {}",
+               vk::to_string(wait_result));
+    g_sotc_wait_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - wait_start)
+                                 .count(),
+                             std::memory_order_relaxed);
+    // The ahead copy waited for all submitted work.
+    work_semaphore.Refresh();
 }
 
 void Scheduler::PopPendingOperations() {

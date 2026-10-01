@@ -478,6 +478,15 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
         if (info.stores.GetAny(IR::Attribute::Depth)) {
             ctx.AddExecutionMode(main, spv::ExecutionMode::DepthReplacing);
         }
+        // Only for shaders whose side effects depend on it: storage writes, and nothing early
+        // tests would change (discard, or a depth, stencil ref or sample mask export).
+        if (ctx.runtime_info.hw.fs.early_fragment_tests && info.has_storage_images &&
+            !info.has_discard && !info.stores.GetAny(IR::Attribute::Depth) &&
+            !info.stores.Get(IR::Attribute::StencilRef) &&
+            !info.stores.Get(IR::Attribute::SampleMask)) {
+            ctx.AddExecutionMode(main, spv::ExecutionMode::EarlyFragmentTests);
+            LOG_CRITICAL(Render_Recompiler, "fs {:#x}: early fragment tests", info.pgm_hash); // DEBUG
+        }
         break;
     case SwStage::Geometry:
         execution_model = spv::ExecutionModel::Geometry;

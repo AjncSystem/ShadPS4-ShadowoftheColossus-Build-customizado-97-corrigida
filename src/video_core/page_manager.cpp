@@ -25,7 +25,9 @@
 #include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
+#include "common/decoder.h"
 #include "core/signals.h"
+#include "shader_recompiler/ir/passes/srt.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
@@ -532,6 +534,7 @@ struct SignalImpl : public PageManager::Impl {
         constexpr auto priority = std::numeric_limits<u32>::min();
         Core::Signals::Instance()->RegisterAccessViolationHandler(GuestFaultSignalHandler,
                                                                   priority);
+        Shader::SetSrtCleanLoad(&SrtWalkerCleanLoad);
     }
 
     void Protect(VAddr address, size_t size, Core::MemoryPermission perms) override {
@@ -573,12 +576,116 @@ struct SignalImpl : public PageManager::Impl {
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
         Vulkan::SotcRecordFault(addr, Common::IsWriteError(context), is_gpu_thread);
+        if (!Common::IsWriteError(context) && is_gpu_thread && TryCleanWalkerLoad(context)) {
+            return true;
+        }
         if (Common::IsWriteError(context)) {
             return rasterizer->InvalidateMemory(addr, size, is_gpu_thread);
         } else {
             return rasterizer->ReadMemory(addr, size, is_gpu_thread);
         }
         return false;
+    }
+
+#ifdef _WIN32
+    static DWORD64* ContextRegister(CONTEXT* ctx, ZydisRegister reg) {
+        switch (ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, reg)) {
+        case ZYDIS_REGISTER_RAX: return &ctx->Rax;
+        case ZYDIS_REGISTER_RCX: return &ctx->Rcx;
+        case ZYDIS_REGISTER_RDX: return &ctx->Rdx;
+        case ZYDIS_REGISTER_RBX: return &ctx->Rbx;
+        case ZYDIS_REGISTER_RSI: return &ctx->Rsi;
+        case ZYDIS_REGISTER_RDI: return &ctx->Rdi;
+        case ZYDIS_REGISTER_R8: return &ctx->R8;
+        case ZYDIS_REGISTER_R9: return &ctx->R9;
+        case ZYDIS_REGISTER_R10: return &ctx->R10;
+        case ZYDIS_REGISTER_R11: return &ctx->R11;
+        case ZYDIS_REGISTER_R12: return &ctx->R12;
+        case ZYDIS_REGISTER_R13: return &ctx->R13;
+        case ZYDIS_REGISTER_R14: return &ctx->R14;
+        case ZYDIS_REGISTER_R15: return &ctx->R15;
+        default: return nullptr;
+        }
+    }
+#endif
+
+    /// SRT walkers read user data tables that often share a page with bytes the GPU wrote. The
+    /// page is read-protected for those bytes, but the backing already holds every byte the GPU
+    /// did not write: complete such a load from the backing instead of a full GPU readback. The
+    /// page stays protected, so reads of the GPU-written bytes still fault and read back.
+    /// Idea from srt_walker_clean_reads of Pink-shadPS4 (luizgustavs). SOTC_CLEAN_READS=0 = off.
+    /// Clean-load callback of the generated walkers (GPU command processor thread).
+    static bool SrtWalkerCleanLoad(u64 address, u32 size, u64* out) {
+        // No GPU mapping check: without one the page is not protected and the backing holds
+        // what a plain load would read.
+        if (std::this_thread::get_id() != rasterizer->GetGpuCommandProcessorThread()) {
+            return false;
+        }
+        *out = 0;
+        if (!rasterizer->ReadCleanMemory(address, out, size)) {
+            return false;
+        }
+        Vulkan::g_sotc_clean_fast.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    static bool TryCleanWalkerLoad(void* context) {
+#ifdef _WIN32
+        static const bool enabled = [] {
+            const char* v = std::getenv("SOTC_CLEAN_READS");
+            return v ? std::atoi(v) != 0 : true;
+        }();
+        const void* rip = Common::GetRip(context);
+        if (!enabled || !Shader::IsSrtWalkerCode(rip)) {
+            return false;
+        }
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        const auto status = Common::Decoder::Instance()->decodeInstruction(
+            instruction, operands, const_cast<void*>(rip), 15);
+        if (!ZYAN_SUCCESS(status) || instruction.mnemonic != ZYDIS_MNEMONIC_MOV ||
+            operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+            operands[1].type != ZYDIS_OPERAND_TYPE_MEMORY) {
+            return false;
+        }
+        auto* ctx = static_cast<EXCEPTION_POINTERS*>(context)->ContextRecord;
+        const auto& mem = operands[1].mem;
+        const u32 size = operands[0].size / 8;
+        DWORD64* dst = ContextRegister(ctx, operands[0].reg.value);
+        if (!dst || (size != 4 && size != 8) || mem.segment != ZYDIS_REGISTER_DS ||
+            mem.base == ZYDIS_REGISTER_NONE) {
+            return false;
+        }
+        const DWORD64* base = ContextRegister(ctx, mem.base);
+        if (!base) {
+            return false;
+        }
+        VAddr address = *base + static_cast<u64>(mem.disp.value);
+        if (mem.index != ZYDIS_REGISTER_NONE) {
+            const DWORD64* index = ContextRegister(ctx, mem.index);
+            if (!index) {
+                return false;
+            }
+            address += *index * mem.scale;
+        }
+        if (!rasterizer->IsMapped(address, size) || rasterizer->IsRangeGpuWritten(address, size)) {
+            return false;
+        }
+        u64 value = 0;
+        if (!Core::Memory::Instance()->TryCopySparseMemory(address, reinterpret_cast<u8*>(&value),
+                                                           size)) {
+            return false;
+        }
+        // A 32-bit destination zero-extends into the full register, as the mov would.
+        *dst = value;
+        ctx->Rip += instruction.length;
+        Vulkan::g_sotc_clean_loads.fetch_add(1, std::memory_order_relaxed);
+        // Later walker loads in this page try the clean path before faulting.
+        Shader::MarkSrtCleanPages(address, size);
+        return true;
+#else
+        return false;
+#endif
     }
 };
 

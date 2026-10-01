@@ -1098,9 +1098,37 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - t0)
                                 .count();
+            // DEBUG: stderr too, the async log can stop being written before the process ends.
+            const u64 finishes = g_sotc_finish_count.exchange(0);
+            const u64 downloads = g_sotc_download_count.exchange(0);
+            const u64 wait_ms = g_sotc_wait_us.exchange(0) / 1000;
             LOG_CRITICAL(Render_Vulkan, "SOTCFRAME {} t={}ms finish={} downloads={} wait={}ms",
-                         frames, ms, g_sotc_finish_count.exchange(0),
-                         g_sotc_download_count.exchange(0), g_sotc_wait_us.exchange(0) / 1000);
+                         frames, ms, finishes, downloads, wait_ms);
+            const u64 rb_cur = g_sotc_rb_current.exchange(0);
+            const u64 rb_busy = g_sotc_rb_old_busy.exchange(0);
+            const u64 rb_idle = g_sotc_rb_old_idle.exchange(0);
+            const u64 rb_gpu = g_sotc_rb_gpu_thread.exchange(0);
+            const u64 rb_guest = g_sotc_rb_guest_thread.exchange(0);
+            const u64 rb_clean = g_sotc_rb_clean.exchange(0);
+            const u64 clean_loads = g_sotc_clean_loads.exchange(0);
+            const u64 clean_fast = g_sotc_clean_fast.exchange(0);
+            std::fprintf(stderr,
+                         "SOTCFRAME %llu t=%lldms finish=%llu downloads=%llu wait=%llums "
+                         "rb_cur=%llu rb_busy=%llu rb_idle=%llu rb_gpu=%llu rb_guest=%llu "
+                         "rb_clean=%llu clean_loads=%llu clean_fast=%llu\n",
+                         static_cast<unsigned long long>(frames), static_cast<long long>(ms),
+                         static_cast<unsigned long long>(finishes),
+                         static_cast<unsigned long long>(downloads),
+                         static_cast<unsigned long long>(wait_ms),
+                         static_cast<unsigned long long>(rb_cur),
+                         static_cast<unsigned long long>(rb_busy),
+                         static_cast<unsigned long long>(rb_idle),
+                         static_cast<unsigned long long>(rb_gpu),
+                         static_cast<unsigned long long>(rb_guest),
+                         static_cast<unsigned long long>(rb_clean),
+                         static_cast<unsigned long long>(clean_loads),
+                         static_cast<unsigned long long>(clean_fast));
+            std::fflush(stderr);
         }
     }
 }

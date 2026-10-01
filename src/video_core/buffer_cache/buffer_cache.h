@@ -97,6 +97,23 @@ public:
     /// Return true when a region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
 
+    /// Byte-precise: true when a written binding covered any byte of the range since its last
+    /// readback. Readbacks copy only these bytes, so the backing holds every other byte.
+    /// Command processor thread only.
+    [[nodiscard]] bool IsRangeGpuWritten(VAddr addr, size_t size) const {
+        return gpu_modified_ranges.Intersects(addr, size);
+    }
+
+    /// Reads [addr, addr + size) from the backing when no byte of it is GPU-written, through a
+    /// cache of pages holding their backing pointer and the hull of their GPU-written bytes.
+    /// From Pink-shadPS4 (luizgustavs). Command processor thread only.
+    bool ReadClean(VAddr addr, void* out, u32 size);
+
+    /// A GPU mapping changed: cached backing pointers may be stale. Any thread.
+    void OnMappingChanged() {
+        clean_map_generation.fetch_add(1, std::memory_order_release);
+    }
+
     /// Synchronizes all buffers needed for DMA.
     void SynchronizeDmaBuffers();
 
@@ -173,6 +190,25 @@ private:
     static constexpr size_t MaxHotReadbacks = 64;
     static constexpr auto HotReadbackLifetime = std::chrono::seconds(2);
     std::vector<HotReadback> hot_readbacks;
+    struct CleanPage {
+        VAddr page_addr = ~0ULL;
+        u64 map_generation{};
+        const u8* backing{};
+        u32 dirty_lo{};
+        u32 dirty_hi{};
+    };
+    static constexpr u64 CleanPageBits = 12;
+    static constexpr u64 CleanPageSize = 1ULL << CleanPageBits;
+    static constexpr size_t NumCleanPages = 1024;
+    std::array<CleanPage, NumCleanPages> clean_pages{};
+    bool clean_pages_used = false;
+    std::atomic<u64> clean_map_generation{};
+    void AddGpuModified(VAddr addr, u64 size);
+
+    /// GPU writes recorded into the command buffer still being built (tick current_writes_tick).
+    RangeSet current_writes;
+    u64 current_writes_tick{};
+    void RecordCurrentWrite(VAddr addr, u64 size);
 
     /// Number of resident blocks still bound to each backing allocation.
     std::unordered_map<VkDeviceMemory, u64> backing_blocks;

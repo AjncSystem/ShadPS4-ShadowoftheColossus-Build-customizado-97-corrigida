@@ -28,6 +28,14 @@ namespace Vulkan {
 extern std::atomic<u64> g_sotc_finish_count;
 extern std::atomic<u64> g_sotc_wait_us;
 extern std::atomic<u64> g_sotc_download_count;
+extern std::atomic<u64> g_sotc_rb_current;   // DEBUG
+extern std::atomic<u64> g_sotc_rb_old_busy;  // DEBUG
+extern std::atomic<u64> g_sotc_rb_old_idle;  // DEBUG
+extern std::atomic<u64> g_sotc_rb_gpu_thread;   // DEBUG
+extern std::atomic<u64> g_sotc_rb_guest_thread; // DEBUG
+extern std::atomic<u64> g_sotc_rb_clean;        // DEBUG
+extern std::atomic<u64> g_sotc_clean_loads;     // DEBUG
+extern std::atomic<u64> g_sotc_clean_fast;      // DEBUG
 void DumpRecentSubmits(vk::Device device, u64 stuck_tick);
 
 class Instance;
@@ -377,6 +385,13 @@ public:
     /// Waits for the given tick to trigger on the GPU.
     void Wait(u64 tick);
 
+    /// Begins a one-off command buffer that is submitted ahead of the one being recorded, for
+    /// work that only depends on already submitted commands (readbacks of their results).
+    vk::CommandBuffer BeginAhead();
+
+    /// Submits the command buffer from BeginAhead after all submitted work and waits for it.
+    void SubmitAheadAndWait();
+
     /// Attempts to execute operations whose tick the GPU has caught up with.
     void PopPendingOperations();
 
@@ -385,6 +400,11 @@ public:
 
     /// Ends current rendering scope.
     void EndRendering();
+
+    /// True inside a rendering scope.
+    bool IsRendering() const {
+        return is_rendering;
+    }
 
     /// Starts a new session.
     void BeginSession();
@@ -487,6 +507,9 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    vk::UniqueCommandPool ahead_pool;
+    vk::CommandBuffer ahead_cmdbuf;
+    vk::UniqueFence ahead_fence;
     tracy::VkCtxScope* profiler_scope{};
 };
 

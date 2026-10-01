@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <optional>
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
@@ -54,6 +55,53 @@ namespace Shader {
 // tracking-protected pages beyond the end of a table can fault inside the walker.
 void SrtCopyWindow(u32* dst, u64 src, u64 bytes) {
     Core::Memory::Instance()->CopySparseMemory(src, reinterpret_cast<u8*>(dst), bytes);
+}
+
+bool IsSrtWalkerCode(const void* code) {
+    const u8* code_start = g_srt_codegen_start;
+    return code_start && code >= code_start && code < code_start + g_srt_codegen.getSize();
+}
+
+namespace {
+bool NoCleanLoad(u64, u32, u64*) {
+    return false;
+}
+
+SrtWalkerContext& WalkerContext() {
+    static SrtWalkerContext context{
+        .clean_pages = [] {
+            // One bit per 4 KiB page; untouched parts of the bitmap are never committed. Always
+            // allocated: walkers restored from the pipeline cache test it unconditionally
+            // (SOTC_CLEAN_READS=0 only stops marking pages).
+            auto* const pages =
+                static_cast<u64*>(std::calloc(SrtCleanPageLimit >> 18, sizeof(u64)));
+            ASSERT_MSG(pages, "No memory for the SRT clean page bitmap");
+            return pages;
+        }(),
+        .clean_load = &NoCleanLoad,
+    };
+    return context;
+}
+} // namespace
+
+const SrtWalkerContext* GetSrtWalkerContext() {
+    return &WalkerContext();
+}
+
+void SetSrtCleanLoad(bool (*clean_load)(u64, u32, u64*)) {
+    WalkerContext().clean_load = clean_load;
+}
+
+void MarkSrtCleanPages(u64 address, u32 size) {
+    auto& context = WalkerContext();
+    if (!context.clean_pages) {
+        return;
+    }
+    for (u64 page = address >> 12; page <= (address + size - 1) >> 12; ++page) {
+        if ((page << 12) < SrtCleanPageLimit) {
+            context.clean_pages[page >> 6] |= 1ULL << (page & 63);
+        }
+    }
 }
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
@@ -194,6 +242,11 @@ struct PassInfo {
 
     // Bumped during codegen to assign offsets to readconsts
     u16 dst_off_dw;
+
+    // Walker loads test the clean-page bitmap (SrtWalkerContext in r13)
+    bool clean_loads = false;
+    Xbyak::Label clean_load_stub;
+    bool uses_clean_load_stub = false;
 
     PtrUserList* GetUsesAsPointer(IR::Inst* inst) {
         auto it = pointer_uses.find(inst);
@@ -602,15 +655,101 @@ static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& p
     }
 }
 
+enum class GuestLoadDst { Rdi, R10d };
+
+/// Loads guest memory at src into rdi (8 bytes) or r10d (4 bytes). The address goes to r11 and
+/// its page is tested in SrtWalkerContext::clean_pages (r13 = context): on a set bit the shared
+/// stub calls clean_load, and the plain load only runs when that declines. Clobbers rax, r9 and
+/// r11, which the rest of the walker does not use. From Pink-shadPS4 (luizgustavs).
+static void EmitGuestLoad(Xbyak::CodeGenerator& c, PassInfo& pass_info, GuestLoadDst dst,
+                          const Xbyak::Address& src) {
+    if (!pass_info.clean_loads) {
+        if (dst == GuestLoadDst::Rdi) {
+            c.mov(rdi, src);
+        } else {
+            c.mov(r10d, src);
+        }
+        return;
+    }
+    Xbyak::Label plain, done;
+    const u32 size = dst == GuestLoadDst::Rdi ? 8 : 4;
+    c.lea(r11, src);
+    c.mov(rax, r11);
+    c.shr(rax, 12);
+    c.cmp(rax, static_cast<u32>(SrtCleanPageLimit >> 12));
+    c.jae(plain, Xbyak::CodeGenerator::T_NEAR);
+    c.mov(r9, qword[r13]);
+    c.bt(qword[r9], rax);
+    c.jnc(plain, Xbyak::CodeGenerator::T_NEAR);
+    c.mov(eax, size);
+    c.call(pass_info.clean_load_stub);
+    pass_info.uses_clean_load_stub = true;
+    c.test(al, al);
+    c.jz(plain, Xbyak::CodeGenerator::T_NEAR);
+    if (dst == GuestLoadDst::Rdi) {
+        c.mov(rdi, r9);
+    } else {
+        c.mov(r10d, r9d);
+    }
+    c.jmp(done, Xbyak::CodeGenerator::T_NEAR);
+    c.L(plain);
+    if (dst == GuestLoadDst::Rdi) {
+        c.mov(rdi, qword[r11]);
+    } else {
+        c.mov(r10d, dword[r11]);
+    }
+    c.L(done);
+}
+
+/// Shared by the guest loads of one walker, emitted after its ret so the code stays position
+/// independent: calls clean_load(r11, eax, &value) with the walker registers saved and the stack
+/// aligned. Returns the result in al and the value in r9.
+static void EmitCleanLoadStub(Xbyak::CodeGenerator& c, PassInfo& pass_info) {
+    c.L(pass_info.clean_load_stub);
+    c.push(rcx);
+    c.push(rdx);
+    c.push(rsi);
+    c.push(rdi);
+    c.push(r8);
+    c.push(r10);
+    c.push(r11);
+    c.push(rbx);
+    c.sub(rsp, 8); // value
+    c.mov(rbx, rsp);
+    c.and_(rsp, ~15);
+#ifdef _WIN32
+    c.sub(rsp, 32); // Shadow space
+    c.mov(rcx, r11);
+    c.mov(edx, eax);
+    c.mov(r8, rbx);
+#else
+    c.mov(rdi, r11);
+    c.mov(esi, eax);
+    c.mov(rdx, rbx);
+#endif
+    c.call(ptr[r13 + 8]);
+    c.mov(rsp, rbx);
+    c.pop(r9);
+    c.pop(rbx);
+    c.pop(r11);
+    c.pop(r10);
+    c.pop(r8);
+    c.pop(rdi);
+    c.pop(rsi);
+    c.pop(rdx);
+    c.pop(rcx);
+    c.ret();
+}
+
 static inline bool PushPtr(Xbyak::CodeGenerator& c, PassInfo& pass_info, const IR::Value& off_dw) {
     c.push(rdi);
     if (off_dw.IsImmediate()) {
-        c.mov(rdi, ptr[rdi + (off_dw.U32() << 2)]);
+        EmitGuestLoad(c, pass_info, GuestLoadDst::Rdi, ptr[rdi + (off_dw.U32() << 2)]);
     } else {
         ABORT_ON_FAILURE(ComputeOffset(c, r10d, pass_info, off_dw));
         c.shl(r10d, 2);
         c.mov(r10d, r10d);
-        c.mov(rdi, ptr[rdi + r10]);
+        EmitGuestLoad(c, pass_info, GuestLoadDst::Rdi, ptr[rdi + r10]);
     }
     c.mov(r10, 0xFFFFFFFFFFFFULL);
     c.and_(rdi, r10);
@@ -670,7 +809,7 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     std::optional<u32> dynamic_window;
     for (auto [src_off_dw, use] : *use_list) {
         if (src_off_dw.IsImmediate()) {
-            c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
+            EmitGuestLoad(c, pass_info, GuestLoadDst::R10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
             if (!ComputeOffset(c, r10d, pass_info, src_off_dw)) {
                 if (use->GetOpcode() != IR::Opcode::ReadConst) {
@@ -689,7 +828,7 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
             }
             c.shl(r10d, 2);
             c.mov(r10d, r10d);
-            c.mov(r10d, dword[rdi + r10]);
+            EmitGuestLoad(c, pass_info, GuestLoadDst::R10d, ptr[rdi + r10]);
         }
         c.mov(ptr[rsi + (pass_info.dst_off_dw << 2)], r10d);
 
@@ -717,9 +856,13 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     EnsureSrtWalkerFaultHandler();
 
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
-    // Keep the copy helper (third argument) in a register the generated code does not use.
+    // Keep the copy helper (third argument) and the walker context (fourth) in registers the
+    // generated code does not use.
     c.push(r12);
+    c.push(r13);
     c.mov(r12, rdx);
+    c.mov(r13, rcx);
+    pass_info.clean_loads = GetSrtWalkerContext()->clean_pages != nullptr;
     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
     ASSERT(pass_info.dst_off_dw == info.srt_info.flattened_bufsize_dw);
 
@@ -727,8 +870,12 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
         VisitPointer(IR::Value(static_cast<u32>(sgpr_base)), root, pass_info, c);
     }
 
+    c.pop(r13);
     c.pop(r12);
     c.ret();
+    if (pass_info.uses_clean_load_stub) {
+        EmitCleanLoadStub(c, pass_info);
+    }
     c.ready();
 
     info.srt_info.walker_func_size =
@@ -942,6 +1089,19 @@ void SrtCopyWindow(u32* dst, u64 src, u64 bytes) {
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
 }
+
+bool IsSrtWalkerCode(const void* code) {
+    return false;
+}
+
+const SrtWalkerContext* GetSrtWalkerContext() {
+    static const SrtWalkerContext context{};
+    return &context;
+}
+
+void SetSrtCleanLoad(bool (*)(u64, u32, u64*)) {}
+
+void MarkSrtCleanPages(u64, u32) {}
 
 namespace Optimization {
 

@@ -75,6 +75,14 @@ public:
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
     bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false);
     bool IsMapped(VAddr addr, u64 size);
+    /// Command processor thread only, see BufferCache::IsRangeGpuWritten.
+    bool IsRangeGpuWritten(VAddr addr, u64 size) const {
+        return buffer_cache.IsRangeGpuWritten(addr, size);
+    }
+    /// Command processor thread only, see BufferCache::ReadClean.
+    bool ReadCleanMemory(VAddr addr, void* out, u32 size) {
+        return buffer_cache.ReadClean(addr, out, size);
+    }
     void MapMemory(VAddr addr, u64 size);
     void RegisterMemory(VAddr addr, u64 size);
     void UnmapMemory(VAddr addr, u64 size);
@@ -128,6 +136,9 @@ private:
     void BindIndexBuffer(u32 index_offset = 0);
 
     void ResetBindings(bool is_compute);
+    void FlushPeriodic();
+    u64 commands_tick{};
+    u64 commands_since_submit{};
 
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);

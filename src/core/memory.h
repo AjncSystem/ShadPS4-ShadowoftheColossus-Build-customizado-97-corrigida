@@ -254,6 +254,16 @@ public:
 
     void CopySparseMemory(VAddr source, u8* dest, u64 size);
 
+    /// Like CopySparseMemory, but fails instead of zero-filling pages without backing.
+    bool TryCopySparseMemory(VAddr source, u8* dest, u64 size);
+
+    /// Host pointer to the backing of a guest address, valid up to the end of its 16 KiB
+    /// backing page, or nullptr.
+    const u8* GetBackingPointer(VAddr address) const {
+        const auto* entry = impl.BackingPages().find(address >> 14);
+        return entry && *entry ? *entry + (address % 16_KB) : nullptr;
+    }
+
     bool TryWriteBacking(void* address, const void* data, u64 size);
 
     void SetupMemoryRegions(u64 flexible_size, bool use_extended_mem1, bool use_extended_mem2);

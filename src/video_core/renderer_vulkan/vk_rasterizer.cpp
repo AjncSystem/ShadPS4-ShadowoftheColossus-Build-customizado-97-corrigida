@@ -17,6 +17,7 @@
 #include <array>
 #include <memory>
 #include "common/debug.h"
+#include "common/elf_info.h"
 #include "common/string_util.h"
 #include <atomic>
 #include <array>
@@ -522,6 +523,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     SyncDrawDebug(pipeline, is_indexed ? "DrawIndexed" : "Draw", regs.num_indices, regs.num_instances.NumInstances(), 0);
 
     ResetBindings(false);
+    FlushPeriodic();
 }
 
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
@@ -633,6 +635,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     }
 
     ResetBindings(false);
+    FlushPeriodic();
 }
 
 void Rasterizer::DispatchDirect() {
@@ -737,6 +740,7 @@ void Rasterizer::DispatchDirect() {
     SyncDrawDebug(pipeline, "Dispatch", cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
 
     ResetBindings(true);
+    FlushPeriodic();
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
@@ -773,6 +777,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
                          vk::AccessFlagBits2::eIndirectCommandRead);
 
     ResetBindings(true);
+    FlushPeriodic();
 }
 
 u64 Rasterizer::Flush() {
@@ -962,6 +967,35 @@ void Rasterizer::BindIndexBuffer(u32 index_offset) {
     fixed_function_reads.push_back({buffer, offset, index_buffer_size, false});
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindIndexBuffer(buffer->Handle(), offset, index_type);
+}
+
+void Rasterizer::FlushPeriodic() {
+    // Readbacks drain the GPU, but between them the GPU only gets work when a readback submits:
+    // it sits idle while the command processor records. Submitting every N draws/dispatches lets
+    // it run the frame during the recording. A submit inside a render pass cuts it, so wait for a
+    // command outside one, up to 4 * N. From periodic_flush_commands of Pink-shadPS4
+    // (luizgustavs). SOTC_FLUSH_EVERY=N sets it, 0 = off.
+    static const u32 every = [] {
+        if (const char* v = std::getenv("SOTC_FLUSH_EVERY")) {
+            return static_cast<u32>(std::strtoul(v, nullptr, 10));
+        }
+        // SotC: +20% fps in the open world (14-15 -> 18). Other games keep the upstream behavior.
+        return Common::ElfInfo::Instance().GameSerial() == "CUSA08809" ? 256u : 0u;
+    }();
+    if (every == 0) {
+        return;
+    }
+    const u64 tick = scheduler.CurrentTick();
+    if (tick != commands_tick) {
+        commands_tick = tick;
+        commands_since_submit = 0;
+    }
+    ++commands_since_submit;
+    if (commands_since_submit < every ||
+        (scheduler.IsRendering() && commands_since_submit < u64{every} * 4)) {
+        return;
+    }
+    scheduler.Flush();
 }
 
 void Rasterizer::ResetBindings(bool is_compute) {
@@ -1769,6 +1803,7 @@ bool Rasterizer::IsMapped(VAddr addr, u64 size) {
 }
 
 void Rasterizer::MapMemory(VAddr addr, u64 size) {
+    buffer_cache.OnMappingChanged();
     {
         std::scoped_lock lock{mapped_ranges_mutex};
         mapped_ranges += decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
@@ -1780,6 +1815,7 @@ void Rasterizer::RegisterMemory(VAddr addr, u64 size) {
 }
 
 void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
+    buffer_cache.OnMappingChanged();
     buffer_cache.InvalidateMemory(addr, size);
     // Give the arena memory back; it runs on the GPU thread, ordered before later draws.
     // Releasing arena memory on unmap still races with in-flight GPU work during loads

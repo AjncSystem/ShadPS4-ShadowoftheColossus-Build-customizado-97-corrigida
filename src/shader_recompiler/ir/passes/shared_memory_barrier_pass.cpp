@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <queue>
 #include <unordered_set>
 #include "shader_recompiler/ir/breadth_first_search.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
@@ -63,22 +65,62 @@ static void EmitBarrierAtBlockStart(IR::Block* block) {
     ir.Barrier();
 }
 
-static bool IsDivergent(const IR::U1& cond) {
-    return IR::BreadthFirstSearch(cond, [](IR::Inst* inst) -> std::optional<bool> {
-               if (inst->GetOpcode() == IR::Opcode::GetAttributeU32 &&
-                   inst->Arg(0).Attribute() == IR::Attribute::LocalInvocationId) {
-                   return true;
-               }
-               return std::nullopt;
-           }) == true;
+struct DivergenceContext {
+    // Blocks whose ReadLane with a constant lane the wave64 lowering turns into a
+    // workgroup-uniform value (an exchange through LDS).
+    std::unordered_set<const IR::Block*> uniform_readlane_blocks;
+};
+
+// A condition is divergent when it depends on LocalInvocationId. With uniform_readlane_blocks,
+// the search does not continue through uniform ReadLanes: a wave-wide reduction (a tile min/max
+// depth, for example) is the same in every invocation even though its inputs are not.
+// From Pink-shadPS4 (luizgustavs), lds_barrier_uniform_readlane.
+static bool SearchDivergence(const IR::U1& cond,
+                             const std::unordered_set<const IR::Block*>* uniform_readlane_blocks) {
+    if (cond.IsImmediate()) {
+        return false;
+    }
+    std::unordered_set<const IR::Inst*> visited{cond.Inst()};
+    std::queue<const IR::Inst*> queue;
+    queue.push(cond.Inst());
+    while (!queue.empty()) {
+        const IR::Inst* inst = queue.front();
+        queue.pop();
+        if (inst->GetOpcode() == IR::Opcode::GetAttributeU32 &&
+            inst->Arg(0).Attribute() == IR::Attribute::LocalInvocationId) {
+            return true;
+        }
+        if (uniform_readlane_blocks && inst->GetOpcode() == IR::Opcode::ReadLane &&
+            inst->Arg(1).IsImmediate() && uniform_readlane_blocks->contains(inst->GetParent())) {
+            continue;
+        }
+        for (size_t arg = inst->NumArgs(); arg--;) {
+            const IR::Value value = inst->Arg(arg);
+            if (value.IsImmediate()) {
+                continue;
+            }
+            const IR::Inst* arg_inst = value.Inst();
+            if (visited.insert(arg_inst).second) {
+                queue.push(arg_inst);
+            }
+        }
+    }
+    return false;
+}
+
+static bool IsDivergent(const IR::U1& cond, const DivergenceContext& ctx) {
+    return SearchDivergence(cond, ctx.uniform_readlane_blocks.empty()
+                                      ? nullptr
+                                      : &ctx.uniform_readlane_blocks);
 }
 
 // Inserts a barrier after divergent conditional blocks to avoid undefined
 // behavior when some threads write and others read from shared memory.
 static void EmitBarrierInMergeBlock(const IR::AbstractSyntaxNode::Data& data,
-                                    NodeSet& divergence_end, u32& divergence_depth) {
+                                    NodeSet& divergence_end, u32& divergence_depth,
+                                    const DivergenceContext& ctx) {
     const IR::U1 cond = data.if_node.cond;
-    if (IsDivergent(cond)) {
+    if (IsDivergent(cond, ctx)) {
         if (divergence_depth == 0) {
             EmitBarrierAtBlockStart(data.if_node.merge);
         }
@@ -89,17 +131,18 @@ static void EmitBarrierInMergeBlock(const IR::AbstractSyntaxNode::Data& data,
 
 // A barrier inside a loop is invalid when different invocations leave on different iterations.
 // Mark such loops so their shared-memory synchronization can be deferred to the merge block.
-static NodeSet FindDivergentLoops(const IR::AbstractSyntaxList& syntax_list) {
+static NodeSet FindDivergentLoops(const IR::AbstractSyntaxList& syntax_list,
+                                  const DivergenceContext& ctx) {
     NodeSet divergent_loops;
     for (const IR::AbstractSyntaxNode& node : syntax_list) {
         switch (node.type) {
         case IR::AbstractSyntaxNode::Type::Repeat:
-            if (IsDivergent(node.data.repeat.cond)) {
+            if (IsDivergent(node.data.repeat.cond, ctx)) {
                 divergent_loops.emplace(node.data.repeat.merge);
             }
             break;
         case IR::AbstractSyntaxNode::Type::Break:
-            if (IsDivergent(node.data.break_node.cond)) {
+            if (IsDivergent(node.data.break_node.cond, ctx)) {
                 divergent_loops.emplace(node.data.break_node.merge);
             }
             break;
@@ -128,9 +171,14 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
         return;
     }
     using Type = IR::AbstractSyntaxNode::Type;
+    DivergenceContext ctx;
+    if (Wave64UniformBranchesEnabled()) {
+        const auto blocks = FindWave64UniformBlocks(program);
+        ctx.uniform_readlane_blocks.insert(blocks.begin(), blocks.end());
+    }
     u32 divergence_depth{};
     NodeSet divergence_end;
-    const NodeSet divergent_loops = FindDivergentLoops(program.syntax_list);
+    const NodeSet divergent_loops = FindDivergentLoops(program.syntax_list, ctx);
     for (const IR::AbstractSyntaxNode& node : program.syntax_list) {
         if (node.type == Type::EndIf) {
             if (divergence_end.contains(node.data.end_if.merge)) {
@@ -141,7 +189,7 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
         // Check if branch depth is zero, we don't want to insert barrier in potentially divergent
         // code.
         if (node.type == Type::If) {
-            EmitBarrierInMergeBlock(node.data, divergence_end, divergence_depth);
+            EmitBarrierInMergeBlock(node.data, divergence_end, divergence_depth, ctx);
             continue;
         }
         if (node.type == Type::Loop && divergent_loops.contains(node.data.loop.merge)) {
