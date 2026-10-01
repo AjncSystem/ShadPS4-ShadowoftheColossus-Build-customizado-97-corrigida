@@ -1,88 +1,24 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <atomic>
-#include <array>
-#include <memory>
-#include <chrono>
-#include <atomic>
-#include <array>
-#include <memory>
 #include <cstdlib>
-#include <atomic>
-#include <array>
-#include <memory>
-#include <string>
-#include <atomic>
-#include <array>
-#include <memory>
 #include "common/debug.h"
 #include "common/elf_info.h"
-#include "common/string_util.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "core/debug_state.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "core/emulator_settings.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "core/memory.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "shader_recompiler/runtime_info.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/amdgpu/liverpool.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/buffer_cache/buffer.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/buffer_cache/buffer_cache.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
-#include "core/signals.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_runtime.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_scheduler.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/texture_cache/image_view.h"
-#include <atomic>
-#include <array>
-#include <memory>
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
@@ -119,232 +55,6 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
 }
 
 Rasterizer::~Rasterizer() = default;
-
-// DEBUG (GPU hang hunting): SOTC_SYNC_DRAWS=<seconds> makes every draw/dispatch issued after
-// that many seconds log its shaders and parameters and then wait for the GPU to finish, so the
-// last "SOTCDRAW" line before a device loss identifies the offending command.
-extern std::atomic<u64> g_sotc_frame_number;
-
-// DEBUG: GPU-side capture of the first bound buffer of one compute shader (SOTC_CAPTURE_HASH).
-// Right before each dispatch the GPU copies 64 bytes of buffer 0 into a host-visible ring, so
-// the values the shader really consumed can be printed after a device loss.
-namespace {
-constexpr u32 SotcCaptureSlots = 32;
-constexpr u32 SotcCaptureBytes = 16384;
-std::unique_ptr<VideoCore::Buffer> sotc_capture_buffer;
-struct SotcCaptureMeta {
-    u64 seq, frame, addr, size, hash;
-    u32 state; // 1 cpu-modified, 2 gpu-modified, 4 in sync batch, 8 served from stream buffer
-    std::vector<u32> cpu; // guest memory as the CPU saw it when the dispatch was recorded
-};
-std::array<SotcCaptureMeta, SotcCaptureSlots> sotc_capture_meta{};
-u64 sotc_capture_seq = 0;
-} // namespace
-
-// DEBUG: recent page faults and written buffer bindings, printed next to stale captures.
-struct SotcEvent {
-    std::atomic<u64> addr;
-    std::atomic<u64> size;
-    std::atomic<u64> info; // faults: 1 write, 2 gpu thread; bindings: shader hash
-    std::atomic<u64> seq;
-};
-constexpr u32 SotcEventSlots = 8192;
-std::array<SotcEvent, SotcEventSlots> sotc_faults{};
-std::array<SotcEvent, SotcEventSlots> sotc_bindings{};
-std::atomic<u64> sotc_fault_seq{0};
-std::atomic<u64> sotc_binding_seq{0};
-
-static void SotcRecord(std::array<SotcEvent, SotcEventSlots>& ring, std::atomic<u64>& counter,
-                       u64 addr, u64 size, u64 info) {
-    const u64 n = counter.fetch_add(1, std::memory_order_relaxed);
-    auto& e = ring[n % SotcEventSlots];
-    e.addr.store(addr, std::memory_order_relaxed);
-    e.size.store(size, std::memory_order_relaxed);
-    e.info.store(info, std::memory_order_relaxed);
-    e.seq.store(sotc_capture_seq, std::memory_order_relaxed);
-}
-
-void SotcRecordFault(u64 addr, bool is_write, bool gpu_thread) {
-    SotcRecord(sotc_faults, sotc_fault_seq, addr, 8, (is_write ? 1 : 0) | (gpu_thread ? 2 : 0));
-}
-
-static void SotcPrintEvents(u64 addr, u64 size) {
-    const u64 page_lo = addr & ~0xFFFFULL;
-    const u64 page_hi = (addr + size + 0xFFFF) & ~0xFFFFULL;
-    const auto print = [&](std::array<SotcEvent, SotcEventSlots>& ring,
-                           std::atomic<u64>& counter, const char* what) {
-        const u64 end = counter.load();
-        const u64 begin = end > SotcEventSlots ? end - SotcEventSlots : 0;
-        u32 shown = 0;
-        for (u64 n = end; n-- > begin && shown < 24;) {
-            auto& e = ring[n % SotcEventSlots];
-            const u64 a = e.addr.load(), sz = e.size.load();
-            if (a < page_hi && a + sz > page_lo) {
-                LOG_CRITICAL(Render_Vulkan, "    {} #{} addr={:#x} size={:#x} info={:#x} at seq {}",
-                             what, n, a, sz, e.info.load(), e.seq.load());
-                ++shown;
-            }
-        }
-    };
-    print(sotc_faults, sotc_fault_seq, "fault");
-    print(sotc_bindings, sotc_binding_seq, "written-binding");
-}
-
-void DumpSotcCaptures() {
-    if (!sotc_capture_buffer) {
-        return;
-    }
-    sotc_capture_buffer->Invalidate(0, SotcCaptureSlots * SotcCaptureBytes);
-    const u64 first = sotc_capture_seq > SotcCaptureSlots ? sotc_capture_seq - SotcCaptureSlots : 0;
-    for (u64 seq = first; seq < sotc_capture_seq; ++seq) {
-        const u32 slot = static_cast<u32>(seq % SotcCaptureSlots);
-        const auto& meta = sotc_capture_meta[slot];
-        const u32* d = reinterpret_cast<const u32*>(sotc_capture_buffer->mapped_data.data() +
-                                                    slot * SotcCaptureBytes);
-        const u32 words = static_cast<u32>(meta.size / 4);
-        u32 mismatches = 0, first_mismatch = ~0U, max_count = 0, max_at = 0;
-        for (u32 i = 0; i < words; ++i) {
-            if (d[i] != meta.cpu[i]) {
-                if (mismatches++ == 0) {
-                    first_mismatch = i;
-                }
-            }
-            if (i % 4 == 0 && d[i] > max_count) {
-                max_count = d[i];
-                max_at = i;
-            }
-        }
-        LOG_CRITICAL(Render_Vulkan,
-                     "  capture seq={} frame={} hash={:#x} state={} addr={:#x} size={} gpu!=cpu "
-                     "words={} (first at {}) max word0={:#x} at {}",
-                     meta.seq, meta.frame, meta.hash, meta.state, meta.addr, meta.size, mismatches, first_mismatch,
-                     max_count, max_at);
-        if (first_mismatch != ~0U) {
-            std::string g, c;
-            for (u32 i = first_mismatch & ~3U; i < std::min(words, (first_mismatch & ~3U) + 8); ++i) {
-                g += fmt::format(" {:08x}", d[i]);
-                c += fmt::format(" {:08x}", meta.cpu[i]);
-            }
-            LOG_CRITICAL(Render_Vulkan, "    gpu:{}", g);
-            LOG_CRITICAL(Render_Vulkan, "    cpu:{}", c);
-            SotcPrintEvents(meta.addr, meta.size);
-        }
-    }
-}
-
-static bool SyncDrawsActive() {
-    // SOTC_SYNC_FRAMES=a-b restricts syncing to presented game frames in [a, b]
-    static const std::pair<u64, u64> frames = [] {
-        const char* v = std::getenv("SOTC_SYNC_FRAMES");
-        if (!v) {
-            return std::make_pair(0ULL, ~0ULL);
-        }
-        char* end{};
-        const u64 a = std::strtoull(v, &end, 10);
-        const u64 b = (end && *end == '-') ? std::strtoull(end + 1, nullptr, 10) : ~0ULL;
-        return std::make_pair(a, b);
-    }();
-    const u64 frame = g_sotc_frame_number.load(std::memory_order_relaxed);
-    if (frame < frames.first || frame > frames.second) {
-        return false;
-    }
-    static const s64 start_after = [] {
-        const char* v = std::getenv("SOTC_SYNC_DRAWS");
-        return v ? std::atoll(v) : -1LL;
-    }();
-    if (start_after < 0) {
-        return false;
-    }
-    static const auto t0 = std::chrono::steady_clock::now();
-    return std::chrono::steady_clock::now() - t0 >= std::chrono::seconds(start_after);
-}
-
-void Rasterizer::SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a, u64 b, u64 c) {
-    if (instance.IsNvCheckpointsEnabled()) {
-        // Tag every command so a device loss can be traced back to it.
-        static std::atomic<u64> marker{0};
-        const u64 m = ++marker;
-        std::string hashes;
-        for (const auto* stage : pipeline->GetStages()) {
-            if (stage != nullptr) {
-                hashes += fmt::format(" {}={:#x}", u32(stage->sw_stage), stage->pgm_hash);
-            }
-        }
-        instance.DescribeCheckpoint(m, fmt::format("{} a={} b={} c={}{}", kind, a, b, c, hashes));
-        instance.SetCheckpoint(scheduler.CommandBuffer(), m);
-    }
-    if (!SyncDrawsActive()) {
-        return;
-    }
-    // SOTC_SYNC_KINDS=Draw,DrawIndexed,DrawIndirect,Dispatch,DispatchIndirect limits which commands
-    // are synchronized; SOTC_SYNC_LOG=0 disables the per-command log line.
-    static const std::string kinds = [] {
-        const char* v = std::getenv("SOTC_SYNC_KINDS");
-        return v ? "," + std::string(v) + "," : std::string{};
-    }();
-    static const bool do_log = [] {
-        const char* v = std::getenv("SOTC_SYNC_LOG");
-        return !(v && v[0] == '0');
-    }();
-    if (!kinds.empty() && kinds.find("," + std::string(kind) + ",") == std::string::npos) {
-        return;
-    }
-    // SOTC_SYNC_BUCKET=k/n syncs only commands whose first-stage shader hash % n == k
-    // (binary search over shaders). SOTC_SYNC_HASH=0x... syncs only that first-stage hash.
-    static const std::pair<u64, u64> bucket = [] {
-        const char* v = std::getenv("SOTC_SYNC_BUCKET");
-        u64 k = 0, n = 0;
-        if (v) {
-            char* end{};
-            k = std::strtoull(v, &end, 10);
-            if (end && *end == '/') {
-                n = std::strtoull(end + 1, nullptr, 10);
-            }
-        }
-        return std::make_pair(k, n);
-    }();
-    static const u64 only_hash = [] {
-        const char* v = std::getenv("SOTC_SYNC_HASH");
-        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
-    }();
-    if (bucket.second != 0 || only_hash != 0) {
-        u64 first_hash = 0;
-        for (const auto* stage : pipeline->GetStages()) {
-            if (stage != nullptr) {
-                first_hash = stage->pgm_hash;
-                break;
-            }
-        }
-        if (bucket.second != 0 && (first_hash % bucket.second) != bucket.first) {
-            return;
-        }
-        if (only_hash != 0 && first_hash != only_hash) {
-            return;
-        }
-    }
-    static const bool flush_only = [] {
-        const char* v = std::getenv("SOTC_SYNC_MODE");
-        return v && std::string(v) == "flush";
-    }();
-    if (!do_log) {
-        if (flush_only) {
-            scheduler.Flush();
-        } else {
-            scheduler.Finish();
-        }
-        return;
-    }
-    static u64 counter = 0;
-    std::string hashes;
-    for (const auto* stage : pipeline->GetStages()) {
-        if (stage != nullptr) {
-            hashes += fmt::format(" {}={:#x}", u32(stage->sw_stage), stage->pgm_hash);
-        }
-    }
-    LOG_CRITICAL(Render_Vulkan, "SOTCDRAW #{} {} a={} b={} c={} shaders:{}", counter++, kind, a, b,
-                c, hashes);
-    scheduler.Finish();
-}
 
 bool Rasterizer::FilterDraw() {
     const auto& regs = liverpool->regs;
@@ -520,7 +230,6 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                     instance_offset);
     }
     DebugState.IncDrawCall();
-    SyncDrawDebug(pipeline, is_indexed ? "DrawIndexed" : "Draw", regs.num_indices, regs.num_instances.NumInstances(), 0);
 
     ResetBindings(false);
     FlushPeriodic();
@@ -557,27 +266,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         BindIndexBuffer();
     }
 
-    {
-        // DEBUG: report indirect draws whose (CPU-visible) arguments request huge amounts of work
-        static const bool check_args = std::getenv("SOTC_CHECK_ARGS") != nullptr;
-        if (check_args && count_address == 0) {
-            const u32* args = reinterpret_cast<const u32*>(arg_address + offset);
-            for (u32 i = 0; i < max_count; ++i, args += stride / 4) {
-                const u64 elems = args[0];
-                const u64 insts = args[1];
-                if (elems * insts > 20'000'000ULL || elems > 20'000'000ULL) {
-                    static u32 reported = 0;
-                    if (reported++ < 200) {
-                        LOG_WARNING(Render_Vulkan,
-                                    "SOTCARGS huge {} draw: count={} instances={} first={} "
-                                    "vtxoff={} firstinst={} addr={:#x}",
-                                    is_indexed ? "indexed" : "plain", args[0], args[1], args[2],
-                                    args[3], is_indexed ? args[4] : 0, arg_address + offset);
-                    }
-                }
-            }
-        }
-    }
     const auto [buffer, base] =
         buffer_cache.ObtainBuffer(arg_address + offset, stride * max_count, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, stride * max_count);
@@ -621,7 +309,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         }
         DebugState.IncDrawCall();
     }
-    SyncDrawDebug(pipeline, "DrawIndirect", max_count, count_address, is_indexed);
 
     // Record the indirect argument reads so a later write to the same range (e.g. a WRITE_DATA
     // packet uploading the next draw's arguments) waits for this draw instead of racing it.
@@ -653,14 +340,6 @@ void Rasterizer::DispatchDirect() {
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
         return;
     }
-    // DEBUG: SOTC_SKIP_HASH=0x... skips dispatches of that compute shader
-    static const u64 skip_hash = [] {
-        const char* v = std::getenv("SOTC_SKIP_HASH");
-        return v ? std::strtoull(v, nullptr, 16) : 0ULL;
-    }();
-    if (skip_hash != 0 && cs.pgm_hash == skip_hash) {
-        return;
-    }
 
     if (!BindResources(pipeline)) {
         return;
@@ -674,70 +353,9 @@ void Rasterizer::DispatchDirect() {
     pipeline->BindResources(set_writes, push_data);
 
     const auto cmdbuf = scheduler.CommandBuffer();
-    // SOTC_CAPTURE="hash:buffer_index,..." (hex hash, decimal index)
-    static const std::vector<std::pair<u64, u32>> captures = [] {
-        std::vector<std::pair<u64, u32>> list;
-        if (const char* v = std::getenv("SOTC_CAPTURE")) {
-            for (const auto& item : Common::SplitString(v, ',')) {
-                const auto colon = item.find(':');
-                list.emplace_back(std::strtoull(item.c_str(), nullptr, 16),
-                                  colon == std::string::npos
-                                      ? 0U
-                                      : static_cast<u32>(std::atoi(item.c_str() + colon + 1)));
-            }
-        }
-        return list;
-    }();
-    const auto capture_it = std::ranges::find(captures, cs.pgm_hash, &std::pair<u64, u32>::first);
-    const u32 capture_index = capture_it != captures.end() ? capture_it->second : 0U;
-    if (capture_it != captures.end() && cs.buffers.size() > capture_index &&
-        !cs.buffers[capture_index].IsSpecial()) {
-        if (!sotc_capture_buffer) {
-            sotc_capture_buffer = std::make_unique<VideoCore::Buffer>(
-                instance, 0, SotcCaptureSlots * SotcCaptureBytes, VideoCore::MemoryType::HostCached,
-                "SotcCapture");
-        }
-        const auto sharp = cs.buffers[capture_index].GetSharp(cs);
-        const u64 size = std::min<u64>(sharp.GetSize(), SotcCaptureBytes) & ~3ULL;
-        if (sharp.base_address != 0 && size != 0) {
-            const u32 state = (buffer_cache.IsRegionCpuModified(sharp.base_address, size) ? 1 : 0) |
-                              (buffer_cache.IsRegionGpuModified(sharp.base_address, size) ? 2 : 0);
-            const auto [src, src_offset] = buffer_cache.ObtainBuffer(sharp.base_address, size, false);
-            const u32 slot = static_cast<u32>(sotc_capture_seq % SotcCaptureSlots);
-            auto& meta = sotc_capture_meta[slot];
-            meta.seq = sotc_capture_seq;
-            meta.frame = g_sotc_frame_number.load(std::memory_order_relaxed);
-            meta.addr = sharp.base_address;
-            meta.size = size;
-            meta.hash = cs.pgm_hash;
-            meta.state = state | (src == &buffer_cache.GetStreamBuffer() ? 8 : 0);
-            meta.cpu.resize(size / 4);
-            std::memcpy(meta.cpu.data(), std::bit_cast<const void*>(sharp.base_address), size);
-            ++sotc_capture_seq;
-            const vk::MemoryBarrier2 before{
-                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
-                .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-            };
-            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1,
-                                                       .pMemoryBarriers = &before});
-            cmdbuf.copyBuffer(src->Handle(), sotc_capture_buffer->Handle(),
-                              vk::BufferCopy{src_offset, slot * SotcCaptureBytes, size});
-            const vk::MemoryBarrier2 after{
-                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
-                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                .dstAccessMask = vk::AccessFlagBits2::eMemoryRead,
-            };
-            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1,
-                                                       .pMemoryBarriers = &after});
-        }
-    }
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
-    SyncDrawDebug(pipeline, "Dispatch", cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
 
     ResetBindings(true);
     FlushPeriodic();
@@ -772,7 +390,6 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatchIndirect(buffer->Handle(), base);
     DebugState.IncDispatch();
-    SyncDrawDebug(pipeline, "DispatchIndirect", address, offset, size);
     runtime.AccessBuffer(buffer, base, size, vk::PipelineStageFlagBits2::eDrawIndirect,
                          vk::AccessFlagBits2::eIndirectCommandRead);
 
@@ -1173,70 +790,6 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
 void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data) {
     const u64 alignment = instance.StorageMinAlignment();
-    // DEBUG: SOTC_DUMP_HASH=0x... logs the buffers bound to that shader and their first dwords
-    // SOTC_DUMP_HASH may list several hashes separated by commas
-    static const std::vector<u64> dump_hashes = [] {
-        std::vector<u64> out;
-        const char* v = std::getenv("SOTC_DUMP_HASH");
-        while (v && *v) {
-            char* end{};
-            out.push_back(std::strtoull(v, &end, 16));
-            v = (end && *end == ',') ? end + 1 : nullptr;
-        }
-        return out;
-    }();
-    const u64 dump_hash =
-        std::ranges::contains(dump_hashes, stage.pgm_hash) ? stage.pgm_hash : 0ULL;
-    static const u64 dump_from_frame = [] {
-        const char* v = std::getenv("SOTC_DUMP_FROM_FRAME");
-        return v ? std::strtoull(v, nullptr, 10) : 0ULL;
-    }();
-    if (dump_hash != 0 && stage.pgm_hash == dump_hash &&
-        g_sotc_frame_number.load(std::memory_order_relaxed) >= dump_from_frame) {
-        static u32 dumps = 0;
-        if (dumps++ < 20000) {
-            if (stage.hw_stage == Shader::HwStage::Compute) {
-                const auto& cs = liverpool->GetCsRegs();
-                LOG_CRITICAL(Render_Vulkan,
-                             "SOTCBUF #{} cs threads={}x{}x{} groups={}x{}x{} subgroup_host={}",
-                             dumps, cs.num_thread_x.full, cs.num_thread_y.full,
-                             cs.num_thread_z.full, cs.dim_x, cs.dim_y, cs.dim_z,
-                             instance.SubgroupSize());
-            }
-            u32 idx = 0;
-            for (const auto& desc : stage.buffers) {
-                if (desc.IsSpecial()) {
-                    LOG_CRITICAL(Render_Vulkan, "SOTCBUF #{} b{} special type={}", dumps, idx++,
-                                 u32(desc.buffer_type));
-                    continue;
-                }
-                const auto vs = desc.GetSharp(stage);
-                if (vs.base_address != 0 && vs.GetSize() != 0 &&
-                    buffer_cache.IsRegionGpuModified(vs.base_address, vs.GetSize())) {
-                    std::string cpu_view;
-                    const u32* p = reinterpret_cast<const u32*>(vs.base_address);
-                    for (int i = 0; i < 8; ++i) {
-                        cpu_view += fmt::format(" {:08x}", p[i]);
-                    }
-                    LOG_CRITICAL(Render_Vulkan, "SOTCBUF #{} b{} GPU-modified, cpu view was:{}",
-                                 dumps, idx, cpu_view);
-                }
-                std::string head;
-                if (vs.base_address != 0 && memory->IsValidMapping(vs.base_address, 32)) {
-                    const u32* p = reinterpret_cast<const u32*>(vs.base_address);
-                    for (int i = 0; i < 8; ++i) {
-                        head += fmt::format(" {:08x}", p[i]);
-                    }
-                }
-                LOG_CRITICAL(Render_Vulkan,
-                             "SOTCBUF #{} sh={:#x} b{} addr={:#x} size={} stride={} written={} fmt={} "
-                             "data:{}",
-                             dumps, stage.pgm_hash, idx++, u64(vs.base_address), vs.GetSize(),
-                             vs.GetStride(),
-                             desc.is_written, desc.is_formatted, head);
-            }
-        }
-    }
     for (const auto& desc : stage.buffers) {
         if (desc.IsSpecial()) {
             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {
@@ -1324,11 +877,6 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     LOG_DEBUG(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
                 }
-                if (size >= (128ULL << 20)) {
-                    LOG_CRITICAL(Render, "SOTCMEM big binding {} MB at {:#x} written={} stage {:#x}",
-                                 size >> 20, vsharp.base_address, desc.is_written,
-                                 stage.pgm_hash);
-                }
                 const auto [buffer, offset] = buffer_cache.ObtainBuffer(
                     vsharp.base_address, size, desc.is_written, desc.is_formatted);
                 const u64 offset_aligned = Common::AlignDown(offset, alignment);
@@ -1341,8 +889,6 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
                 bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
                 if (desc.is_written) {
-                    SotcRecord(sotc_bindings, sotc_binding_seq, vsharp.base_address, size,
-                               stage.pgm_hash);
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
@@ -1770,11 +1316,8 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
-    Core::RecordFaultStage(0x10, addr);
     buffer_cache.InvalidateMemory(addr, size, assume_locks);
-    Core::RecordFaultStage(0x11, addr);
     texture_cache.InvalidateMemory(addr, size);
-    Core::RecordFaultStage(0x12, addr);
     return true;
 }
 

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <cstdlib>
 #include <optional>
 #include <unordered_map>
@@ -30,7 +31,26 @@
 
 using namespace Xbyak::util;
 
-static Xbyak::CodeGenerator g_srt_codegen(32_MB);
+// Every walker of the pipeline cache is loaded here at startup. Walkers with clean-load
+// checks are several times larger, and a long-played game's cache overflowed 32 MB (Xbyak
+// throws, the emulator died at boot). Untouched pages of the buffer are never used.
+static constexpr size_t SrtCodegenSize = 256_MB;
+static Xbyak::CodeGenerator g_srt_codegen(SrtCodegenSize);
+
+/// True when size more bytes fit in the walker buffer; logs the first overflow.
+static bool SrtCodeFits(size_t size) {
+    if (g_srt_codegen.getSize() + size <= SrtCodegenSize) {
+        return true;
+    }
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+        LOG_CRITICAL(Render_Recompiler,
+                     "SRT walker code buffer full ({} of {} bytes used): walkers that do not "
+                     "fit are recompiled or skipped",
+                     g_srt_codegen.getSize(), SrtCodegenSize);
+    }
+    return false;
+}
 static const u8* g_srt_codegen_start = nullptr;
 
 namespace {
@@ -106,6 +126,9 @@ void MarkSrtCleanPages(u64 address, u32 size) {
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     EnsureSrtWalkerFaultHandler();
+    if (!SrtCodeFits(size)) {
+        return nullptr;
+    }
     const auto func_addr = (PFN_SrtWalker)g_srt_codegen.getCurr();
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
@@ -854,6 +877,11 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
     EnsureSrtWalkerFaultHandler();
+    // A walker is at most a few hundred KB; without that much room left, skip it (the shader
+    // then reads zeros from its flattened user data) rather than overflow the buffer.
+    if (!SrtCodeFits(1_MB)) {
+        return;
+    }
 
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
     // Keep the copy helper (third argument) and the walker context (fourth) in registers the

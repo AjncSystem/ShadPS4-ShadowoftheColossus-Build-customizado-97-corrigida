@@ -114,8 +114,7 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
     meta.Read(perm_idx);
 
     spec.Deserialize(ar);
-    info.Deserialize(ar);
-    return true;
+    return info.Deserialize(ar);
 }
 
 void ComputePipelineKey::Serialize(Serialization::Archive& ar) const {
@@ -475,6 +474,11 @@ bool PersistentSrtInfo::Deserialize(Serialization::Archive& ar) {
     if (walker_func_size) {
         walker_func = RegisterWalkerCode(ar.CurrPtr(), walker_func_size);
         ar.Advance(walker_func_size);
+        if (!walker_func) {
+            // No room for the walker: drop the cached program, it is compiled again.
+            walker_func_size = 0;
+            return false;
+        }
     }
 
     return true;

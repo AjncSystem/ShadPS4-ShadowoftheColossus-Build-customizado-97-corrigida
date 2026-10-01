@@ -2,12 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
 #include <ctime>
-#include <thread>
-#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -72,72 +67,18 @@ namespace Core {
 
 std::mutex exit_mutex{};
 
-#ifdef _WIN32
-// Writes a minidump for exceptions nothing else handled, so crashes that leave no log behind
-// (e.g. faults while the logger or the signal dispatcher is unusable) can still be analysed.
-static std::wstring g_crash_dump_dir;
-
-LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* info) {
-    using PFN_MiniDumpWriteDump = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, void*, void*, void*);
-    static HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
-    const auto write_dump =
-        dbghelp ? reinterpret_cast<PFN_MiniDumpWriteDump>(GetProcAddress(dbghelp, "MiniDumpWriteDump"))
-                : nullptr;
-    // info == nullptr asks for a hang dump (all thread stacks, no exception).
-    static std::atomic_flag crash_written{};
-    static std::atomic_flag hang_written{};
-    auto& written = info ? crash_written : hang_written;
-    if (!write_dump || g_crash_dump_dir.empty() || written.test_and_set()) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    SYSTEMTIME time{};
-    GetLocalTime(&time);
-    wchar_t path[MAX_PATH];
-    swprintf_s(path, L"%s\\%s_%04u%02u%02u_%02u%02u%02u.dmp", g_crash_dump_dir.c_str(),
-               info ? L"crash" : L"hang", time.wYear, time.wMonth, time.wDay, time.wHour,
-               time.wMinute, time.wSecond);
-    const HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    struct {
-        DWORD thread_id;
-        EXCEPTION_POINTERS* pointers;
-        BOOL client_pointers;
-    } exception_info{GetCurrentThreadId(), info, FALSE};
-    // MiniDumpWithDataSegs | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo
-    constexpr int DumpType = 0x1 | 0x40 | 0x1000;
-    write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, DumpType,
-               info ? &exception_info : nullptr,
-               nullptr, nullptr);
-    CloseHandle(file);
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
-
 Emulator::Emulator() {
     // Initialize NT API functions, set high priority and disable WER
 #ifdef _WIN32
     Common::NtApi::Initialize();
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     SetErrorMode(SetErrorMode(0) | SEM_NOGPFAULTERRORBOX);
-    g_crash_dump_dir = Common::FS::GetUserPath(Common::FS::PathType::LogDir).wstring();
-    SetUnhandledExceptionFilter(WriteCrashDump);
-    // DEBUG: report console control events (Ctrl+C/Break/close), which SDL turns into a quit.
-    SetConsoleCtrlHandler(
-        [](DWORD type) -> BOOL {
-            LOG_CRITICAL(Core, "SOTCEXIT console control event {}", type);
-            return FALSE;
-        },
-        TRUE);
     // need to init this in order for winsock2 to work
     WORD versionWanted = MAKEWORD(2, 2);
     WSADATA wsaData;
     WSAStartup(versionWanted, &wsaData);
 #endif
     std::at_quick_exit([]() { Common::Singleton<Core::Emulator>::Instance()->Shutdown(); });
-    std::at_quick_exit([] { LOG_CRITICAL(Core, "SOTCEXIT quick_exit called"); });
 }
 
 Emulator::~Emulator() {}
@@ -622,23 +563,6 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     // Load renderdoc module
     VideoCore::LoadRenderDoc();
-    // DEBUG: SOTC_RDOC_AT=<seconds>[,<seconds>...] triggers RenderDoc captures automatically
-    if (const char* at = std::getenv("SOTC_RDOC_AT"); at != nullptr && VideoCore::IsRenderDocLoaded()) {
-        std::thread([list = std::string(at)] {
-            const auto start = std::chrono::steady_clock::now();
-            size_t pos = 0;
-            while (pos < list.size()) {
-                const size_t next = list.find(',', pos);
-                const int secs = std::atoi(list.substr(pos, next - pos).c_str());
-                std::this_thread::sleep_until(start + std::chrono::seconds(secs));
-                VideoCore::TriggerCapture();
-                if (next == std::string::npos) {
-                    break;
-                }
-                pos = next + 1;
-            }
-        }).detach();
-    }
 
     // Initialize patcher
     if (!id.empty()) {

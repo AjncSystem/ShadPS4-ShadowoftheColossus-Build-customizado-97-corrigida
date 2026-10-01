@@ -840,8 +840,6 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     return frame;
 }
 
-std::atomic<u64> g_sotc_frame_number{0}; // DEBUG: presented game frame counter
-
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
     // Free the frame for reuse
     const auto free_frame = [&] {
@@ -1085,50 +1083,24 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     free_frame();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
-        // DEBUG: SOTC_FRAME_LOG=<n> logs the game frame number every n frames
+        // SOTC_FRAME_LOG=<n> prints the frame count and time to stderr every n frames, for
+        // measuring the frame rate of scripted runs.
         static const u64 every = [] {
             const char* v = std::getenv("SOTC_FRAME_LOG");
             return v ? std::strtoull(v, nullptr, 10) : 0ULL;
         }();
-        static u64 frames = 0;
-        static const auto t0 = std::chrono::steady_clock::now();
-        ++frames;
-        g_sotc_frame_number.store(frames, std::memory_order_relaxed);
-        if (every != 0 && frames % every == 0) {
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - t0)
-                                .count();
-            // DEBUG: stderr too, the async log can stop being written before the process ends.
-            const u64 finishes = g_sotc_finish_count.exchange(0);
-            const u64 downloads = g_sotc_download_count.exchange(0);
-            const u64 wait_ms = g_sotc_wait_us.exchange(0) / 1000;
-            LOG_CRITICAL(Render_Vulkan, "SOTCFRAME {} t={}ms finish={} downloads={} wait={}ms",
-                         frames, ms, finishes, downloads, wait_ms);
-            const u64 rb_cur = g_sotc_rb_current.exchange(0);
-            const u64 rb_busy = g_sotc_rb_old_busy.exchange(0);
-            const u64 rb_idle = g_sotc_rb_old_idle.exchange(0);
-            const u64 rb_gpu = g_sotc_rb_gpu_thread.exchange(0);
-            const u64 rb_guest = g_sotc_rb_guest_thread.exchange(0);
-            const u64 rb_clean = g_sotc_rb_clean.exchange(0);
-            const u64 clean_loads = g_sotc_clean_loads.exchange(0);
-            const u64 clean_fast = g_sotc_clean_fast.exchange(0);
-            std::fprintf(stderr,
-                         "SOTCFRAME %llu t=%lldms finish=%llu downloads=%llu wait=%llums "
-                         "rb_cur=%llu rb_busy=%llu rb_idle=%llu rb_gpu=%llu rb_guest=%llu "
-                         "rb_clean=%llu clean_loads=%llu clean_fast=%llu\n",
-                         static_cast<unsigned long long>(frames), static_cast<long long>(ms),
-                         static_cast<unsigned long long>(finishes),
-                         static_cast<unsigned long long>(downloads),
-                         static_cast<unsigned long long>(wait_ms),
-                         static_cast<unsigned long long>(rb_cur),
-                         static_cast<unsigned long long>(rb_busy),
-                         static_cast<unsigned long long>(rb_idle),
-                         static_cast<unsigned long long>(rb_gpu),
-                         static_cast<unsigned long long>(rb_guest),
-                         static_cast<unsigned long long>(rb_clean),
-                         static_cast<unsigned long long>(clean_loads),
-                         static_cast<unsigned long long>(clean_fast));
-            std::fflush(stderr);
+        if (every != 0) {
+            static u64 frames = 0;
+            static const auto t0 = std::chrono::steady_clock::now();
+            if (++frames % every == 0) {
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - t0)
+                                    .count();
+                std::fprintf(stderr, "SOTCFRAME %llu t=%lldms\n",
+                             static_cast<unsigned long long>(frames),
+                             static_cast<long long>(ms));
+                std::fflush(stderr);
+            }
         }
     }
 }

@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <condition_variable>
 #include <coroutine>
 #include <exception>
@@ -109,11 +108,7 @@ public:
                 ++num_commands;
                 submit_cv.notify_one();
             }
-            // DEBUG: a caller blocked here for long (e.g. a guest fault handler waiting for a
-            // flush) leaves a hang dump with every thread's stack.
-            while (!sem.try_acquire_for(std::chrono::seconds(5))) {
-                OnCommandWaitTimeout();
-            }
+            sem.acquire();
         } else {
             std::scoped_lock lk{submit_mutex};
             command_queue.emplace(std::move(func));
@@ -121,8 +116,6 @@ public:
             submit_cv.notify_one();
         }
     }
-
-    void OnCommandWaitTimeout();
 
     void ReserveCopyBufferSpace() {
         GpuQueue& gfx_queue = mapped_queues[GfxQueueId];

@@ -1,14 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <chrono>
-#include <cstdlib>
 #include <limits>
-#include <immintrin.h>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
-#include <cstdio>
 
 #include "common/assert.h"
 
@@ -59,25 +54,6 @@ void Semaphore::Wait(u64 tick) {
     if (IsFree(tick)) {
         return;
     }
-    // Short waits (readbacks) finish before a sleeping wait would even wake up: poll briefly
-    // first. Idea from Pink-shadPS4 (luizgustavs). SOTC_WAIT_SPIN_US sets the budget, 0 = off.
-    static const u64 spin_us = [] {
-        const char* v = std::getenv("SOTC_WAIT_SPIN_US");
-        return v ? std::strtoull(v, nullptr, 10) : u64{0};
-    }();
-    if (spin_us != 0) {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::microseconds(spin_us);
-        do {
-            for (int i = 0; i < 32; ++i) {
-                _mm_pause();
-            }
-            Refresh();
-            if (IsFree(tick)) {
-                return;
-            }
-        } while (std::chrono::steady_clock::now() < deadline);
-    }
 
     // If none of the above is hit, fallback to a regular wait
     const vk::SemaphoreWaitInfo wait_info = {
@@ -86,37 +62,11 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
-    bool reported_slow = false;
     for (;;) {
-        // Wake up every 5s so a stuck wait can be diagnosed instead of blocking silently.
-        constexpr u64 SlowWaitNs = 5'000'000'000ULL;
-        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, SlowWaitNs);
+        const vk::Result result =
+            instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
         if (result == vk::Result::eSuccess) {
             break;
-        }
-        if (result == vk::Result::eTimeout) {
-            if (!std::exchange(reported_slow, true)) {
-                const auto [res, counter] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
-                LOG_ERROR(Render_Vulkan,
-                          "GPU wait is taking long: waiting for tick {}, semaphore at {} ({}), "
-                          "cpu tick {}",
-                          tick, counter, vk::to_string(res), CurrentTick());
-#ifdef _WIN32
-                // DEBUG: the async log is usually lost when this ends in a crash.
-                char line[160];
-                const int len = std::snprintf(line, sizeof(line),
-                                              "SLOW-GPU-WAIT tick=%llu sem=%llu cpu=%llu tid=%lu\n",
-                                              static_cast<unsigned long long>(tick),
-                                              static_cast<unsigned long long>(counter),
-                                              static_cast<unsigned long long>(CurrentTick()),
-                                              0ul);
-                std::fwrite(line, 1, static_cast<size_t>(len), stderr);
-                std::fflush(stderr);
-                DumpRecentSubmits(instance.GetDevice(), tick);
-                instance.DumpCheckpointsToStderr();
-#endif
-            }
-            continue;
         }
         if (result == vk::Result::eErrorDeviceLost) {
             // Spinning here would freeze the emulator forever after a GPU hang/reset.

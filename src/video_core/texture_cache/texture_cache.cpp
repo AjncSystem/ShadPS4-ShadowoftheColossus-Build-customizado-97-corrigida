@@ -970,24 +970,6 @@ void TextureCache::GarbageCollectImages() {
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
     }
-    {
-        // DEBUG: periodic VRAM report.
-        static u32 calls = 0;
-        if (calls++ % 300 == 0) {
-            u64 image_bytes = 0;
-            u32 num_images = 0;
-            for (const Image& image : slot_images) {
-                image_bytes += image.backing ? image.GetHostImageSize() : 0;
-                ++num_images;
-            }
-            LOG_CRITICAL(Render,
-                         "SOTCVRAM used {} MB budget {} MB trigger {} pressure {} critical {} "
-                         "images {} ({} MB)",
-                         total_used_memory >> 20, instance.GetTotalMemoryBudget() >> 20,
-                         trigger_gc_memory >> 20, pressure_gc_memory >> 20,
-                         critical_gc_memory >> 20, num_images, image_bytes >> 20);
-        }
-    }
     if (total_used_memory < trigger_gc_memory) {
         return;
     }

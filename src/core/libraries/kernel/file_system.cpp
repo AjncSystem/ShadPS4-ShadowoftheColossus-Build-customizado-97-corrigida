@@ -134,10 +134,6 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
     bool read_only = false;
     file->m_guest_name = path;
     file->m_host_name = mnt->GetHostPath(file->m_guest_name, &read_only);
-    if (path.starts_with("/app0/logs/")) {
-        // DEBUG: let the game write its own engine log next to the game files
-        read_only = false;
-    }
     bool exists = mnt->Exists(file->m_guest_name);
 
     if (create) {

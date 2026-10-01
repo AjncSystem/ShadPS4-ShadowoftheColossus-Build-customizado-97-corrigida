@@ -485,7 +485,7 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
             !info.stores.Get(IR::Attribute::StencilRef) &&
             !info.stores.Get(IR::Attribute::SampleMask)) {
             ctx.AddExecutionMode(main, spv::ExecutionMode::EarlyFragmentTests);
-            LOG_CRITICAL(Render_Recompiler, "fs {:#x}: early fragment tests", info.pgm_hash); // DEBUG
+            LOG_INFO(Render_Recompiler, "fs {:#x}: early fragment tests", info.pgm_hash);
         }
         break;
     case SwStage::Geometry:

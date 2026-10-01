@@ -1,19 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <cstdio>
-#include <mutex>
-#include <array>
-#include <string>
-#include <cstdlib>
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
 #include "common/assert.h"
 #include "common/debug.h"
-#include "common/io_file.h"
-#include "common/path_util.h"
 #include "common/types.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -208,78 +201,8 @@ std::string Instance::GetDriverVersionName() {
     return GetReadableVersion(version);
 }
 
-namespace {
-constexpr size_t CheckpointHistory = 1u << 20;
-std::mutex checkpoint_mutex;
-std::vector<std::pair<u64, std::string>> checkpoint_names(CheckpointHistory);
-} // namespace
-
-void Instance::SetCheckpoint(vk::CommandBuffer cmdbuf, u64 marker) const {
-    if (nv_checkpoints) {
-        cmdbuf.setCheckpointNV(reinterpret_cast<const void*>(marker));
-    }
-}
-
-void Instance::DescribeCheckpoint(u64 marker, std::string description) const {
-    std::scoped_lock lk{checkpoint_mutex};
-    checkpoint_names[marker % CheckpointHistory] = {marker, std::move(description)};
-}
-
-static std::string CheckpointName(u64 marker) {
-    std::scoped_lock lk{checkpoint_mutex};
-    const auto& entry = checkpoint_names[marker % CheckpointHistory];
-    return entry.first == marker ? entry.second : std::string{"<unknown>"};
-}
-
-void DumpSotcCaptures(); // DEBUG, defined in vk_rasterizer.cpp
-
-void Instance::DumpCheckpointsToStderr() const {
-    if (!nv_checkpoints) {
-        return;
-    }
-    u32 count = 0;
-    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count, nullptr);
-    std::vector<VkCheckpointDataNV> data(count, {VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV});
-    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count,
-                                                             data.data());
-    for (const auto& cp : data) {
-        const u64 marker = reinterpret_cast<u64>(cp.pCheckpointMarker);
-        std::fprintf(stderr, "  checkpoint stage=%s marker=%llu : %s\n",
-                     vk::to_string(static_cast<vk::PipelineStageFlagBits>(cp.stage)).c_str(),
-                     static_cast<unsigned long long>(marker), CheckpointName(marker).c_str());
-        if (cp.stage == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) {
-            for (u64 next = marker + 1; next <= marker + 3; ++next) {
-                std::fprintf(stderr, "    following marker=%llu : %s\n",
-                             static_cast<unsigned long long>(next), CheckpointName(next).c_str());
-            }
-        }
-    }
-    std::fflush(stderr);
-}
-
 void Instance::ReportDeviceFault() const {
     LOG_CRITICAL(Render_Vulkan, "Vulkan device lost");
-    DumpSotcCaptures();
-    if (nv_checkpoints) {
-        u32 count = 0;
-        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count,
-                                                                 nullptr);
-        std::vector<VkCheckpointDataNV> data(count, {VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV});
-        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV(GetGraphicsQueue(), &count,
-                                                                 data.data());
-        for (const auto& cp : data) {
-            const u64 marker = reinterpret_cast<u64>(cp.pCheckpointMarker);
-            LOG_CRITICAL(Render_Vulkan, "  checkpoint stage={} marker={} : {}",
-                         vk::to_string(static_cast<vk::PipelineStageFlagBits>(cp.stage)), marker,
-                         CheckpointName(marker));
-            if (cp.stage == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) {
-                for (u64 next = marker + 1; next <= marker + 4; ++next) {
-                    LOG_CRITICAL(Render_Vulkan, "    following marker={} : {}", next,
-                                 CheckpointName(next));
-                }
-            }
-        }
-    }
     if (!device_fault) {
         LOG_CRITICAL(Render_Vulkan, "VK_EXT_device_fault unavailable, no fault details");
         return;
@@ -316,14 +239,6 @@ void Instance::ReportDeviceFault() const {
     for (const auto& v : vendor) {
         LOG_CRITICAL(Render_Vulkan, "  vendor: {} code={:#x} data={:#x}", v.description,
                      v.vendorFaultCode, v.vendorFaultData);
-    }
-    if (!vendor_binary.empty()) {
-        const auto path = Common::FS::GetUserPath(Common::FS::PathType::LogDir) /
-                          "device_fault_vendor.bin";
-        Common::FS::IOFile file{path, Common::FS::FileAccessMode::Create};
-        file.WriteSpan(std::span<const u8>{vendor_binary});
-        LOG_CRITICAL(Render_Vulkan, "  vendor binary ({} bytes) written to {}",
-                     vendor_binary.size(), path.string());
     }
 }
 
@@ -482,11 +397,6 @@ bool Instance::CreateDevice() {
     }
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
-    // NVIDIA checkpoints: identify the last command the GPU started/finished before a hang.
-    // Opt-in (SHADPS4_GPU_CHECKPOINTS) because a marker is recorded for every draw/dispatch.
-    if (std::getenv("SHADPS4_GPU_CHECKPOINTS") != nullptr) {
-        nv_checkpoints = add_extension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
-    }
     // Device fault reporting: lets us print the faulting address/type after a device loss.
     device_fault = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
     if (device_fault) {

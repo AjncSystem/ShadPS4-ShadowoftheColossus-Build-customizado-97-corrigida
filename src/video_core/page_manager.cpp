@@ -9,19 +9,12 @@
 #include <atomic>
 #include "common/alignment.h"
 #include "common/adaptive_mutex.h"
-#include "common/alignment.h"
 #include "common/assert.h"
-#include "common/alignment.h"
 #include "common/debug.h"
-#include "common/alignment.h"
 #include "common/div_ceil.h"
-#include "common/alignment.h"
 #include "common/error.h"
-#include "common/alignment.h"
 #include "common/multi_level_page_table.h"
-#include "common/alignment.h"
 #include "common/signal_context.h"
-#include "common/alignment.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -33,8 +26,6 @@
 
 #ifndef _WIN64
 #include <sys/mman.h>
-#include "common/alignment.h"
-#include "common/adaptive_mutex.h"
 #else
 #include <windows.h>
 #endif
@@ -47,13 +38,8 @@
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #else
-#include "common/alignment.h"
 #include "common/spin_lock.h"
 #endif
-
-namespace Vulkan {
-void SotcRecordFault(u64 addr, bool is_write, bool gpu_thread);
-}
 
 namespace VideoCore {
 
@@ -209,11 +195,6 @@ struct PageManager::Impl {
         for (const u64 page : locked_pages) {
             locks[page].unlock();
         }
-    }
-
-    u32 DebugWatchers(VAddr address) {
-        const PageState* state = cached_pages.find(address >> PM_PAGE_BITS);
-        return state ? (u32(state->num_write_watchers) << 8) | state->num_read_watchers : ~0U;
     }
 
     void EnsurePages(VAddr begin, VAddr end) {
@@ -575,7 +556,6 @@ struct SignalImpl : public PageManager::Impl {
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
-        Vulkan::SotcRecordFault(addr, Common::IsWriteError(context), is_gpu_thread);
         if (!Common::IsWriteError(context) && is_gpu_thread && TryCleanWalkerLoad(context)) {
             return true;
         }
@@ -609,11 +589,6 @@ struct SignalImpl : public PageManager::Impl {
     }
 #endif
 
-    /// SRT walkers read user data tables that often share a page with bytes the GPU wrote. The
-    /// page is read-protected for those bytes, but the backing already holds every byte the GPU
-    /// did not write: complete such a load from the backing instead of a full GPU readback. The
-    /// page stays protected, so reads of the GPU-written bytes still fault and read back.
-    /// Idea from srt_walker_clean_reads of Pink-shadPS4 (luizgustavs). SOTC_CLEAN_READS=0 = off.
     /// Clean-load callback of the generated walkers (GPU command processor thread).
     static bool SrtWalkerCleanLoad(u64 address, u32 size, u64* out) {
         // No GPU mapping check: without one the page is not protected and the backing holds
@@ -625,10 +600,14 @@ struct SignalImpl : public PageManager::Impl {
         if (!rasterizer->ReadCleanMemory(address, out, size)) {
             return false;
         }
-        Vulkan::g_sotc_clean_fast.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
+    /// SRT walkers read user data tables that often share a page with bytes the GPU wrote. The
+    /// page is read-protected for those bytes, but the backing already holds every byte the GPU
+    /// did not write: complete such a load from the backing instead of a full GPU readback. The
+    /// page stays protected, so reads of the GPU-written bytes still fault and read back.
+    /// Idea from srt_walker_clean_reads of Pink-shadPS4 (luizgustavs). SOTC_CLEAN_READS=0 = off.
     static bool TryCleanWalkerLoad(void* context) {
 #ifdef _WIN32
         static const bool enabled = [] {
@@ -679,7 +658,6 @@ struct SignalImpl : public PageManager::Impl {
         // A 32-bit destination zero-extends into the full register, as the mov would.
         *dst = value;
         ctx->Rip += instruction.length;
-        Vulkan::g_sotc_clean_loads.fetch_add(1, std::memory_order_relaxed);
         // Later walker loads in this page try the clean path before faulting.
         Shader::MarkSrtCleanPages(address, size);
         return true;
@@ -706,10 +684,6 @@ PageManager::PageManager(Vulkan::Rasterizer* rasterizer_) {
 }
 
 PageManager::~PageManager() = default;
-
-u32 PageManager::DebugWatchers(VAddr address) const {
-    return impl->DebugWatchers(address);
-}
 
 void PageManager::OnGpuMap(VAddr address, size_t size) {
     impl->OnMap(address, size);

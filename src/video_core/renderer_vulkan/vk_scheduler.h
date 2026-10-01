@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <atomic>
 
 #include <condition_variable>
 #include <mutex>
@@ -23,20 +22,6 @@ class VkCtxScope;
 }
 
 namespace Vulkan {
-
-// DEBUG: CPU/GPU synchronization counters, printed with the SOTCFRAME log line.
-extern std::atomic<u64> g_sotc_finish_count;
-extern std::atomic<u64> g_sotc_wait_us;
-extern std::atomic<u64> g_sotc_download_count;
-extern std::atomic<u64> g_sotc_rb_current;   // DEBUG
-extern std::atomic<u64> g_sotc_rb_old_busy;  // DEBUG
-extern std::atomic<u64> g_sotc_rb_old_idle;  // DEBUG
-extern std::atomic<u64> g_sotc_rb_gpu_thread;   // DEBUG
-extern std::atomic<u64> g_sotc_rb_guest_thread; // DEBUG
-extern std::atomic<u64> g_sotc_rb_clean;        // DEBUG
-extern std::atomic<u64> g_sotc_clean_loads;     // DEBUG
-extern std::atomic<u64> g_sotc_clean_fast;      // DEBUG
-void DumpRecentSubmits(vk::Device device, u64 stuck_tick);
 
 class Instance;
 

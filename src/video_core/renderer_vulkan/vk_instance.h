@@ -5,14 +5,11 @@
 
 #include <string>
 #include <span>
-#include <string>
 #include <unordered_map>
 
-#include <string>
 #include "video_core/renderer_vulkan/vk_platform.h"
 
 #define TRACY_VK_USE_SYMBOL_TABLE
-#include <string>
 #include <tracy/TracyVulkan.hpp>
 
 namespace Frontend {
@@ -468,20 +465,6 @@ public:
     /// Logs whatever the driver reports about a device loss (VK_EXT_device_fault).
     void ReportDeviceFault() const;
 
-    /// True when VK_NV_device_diagnostic_checkpoints is enabled.
-    /// DEBUG: prints the last GPU checkpoints reached (NV extension) to stderr.
-    void DumpCheckpointsToStderr() const;
-
-    [[nodiscard]] bool IsNvCheckpointsEnabled() const {
-        return nv_checkpoints;
-    }
-
-    /// Records a checkpoint marker in the command buffer (no-op without the extension).
-    void SetCheckpoint(vk::CommandBuffer cmdbuf, u64 marker) const;
-
-    /// Registers a human readable description for a checkpoint marker.
-    void DescribeCheckpoint(u64 marker, std::string description) const;
-
 private:
     /// Creates the logical device opportunistically enabling extensions
     bool CreateDevice();
@@ -557,7 +540,6 @@ private:
     bool supports_memory_budget{};
     bool device_fault{};
     bool device_fault_vendor_binary{};
-    bool nv_checkpoints{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;

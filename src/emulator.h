@@ -12,10 +12,6 @@
 #include "input/controller.h"
 #include "sdl_window.h"
 
-#ifdef _WIN32
-struct _EXCEPTION_POINTERS;
-#endif
-
 namespace Core {
 
 using HLEInitDef = void (*)(Core::Loader::SymbolsResolver* sym);
@@ -24,11 +20,6 @@ struct SysModules {
     std::string_view module_name;
     HLEInitDef callback;
 };
-
-#ifdef _WIN32
-// Writes one minidump per process into the log directory (see emulator.cpp).
-long __stdcall WriteCrashDump(::_EXCEPTION_POINTERS* info);
-#endif
 
 class Emulator {
 public:

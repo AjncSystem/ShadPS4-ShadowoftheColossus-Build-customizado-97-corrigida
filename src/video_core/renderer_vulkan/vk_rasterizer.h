@@ -125,7 +125,6 @@ private:
     void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
 
     bool FilterDraw();
-    void SyncDrawDebug(const Pipeline* pipeline, const char* kind, u64 a, u64 b, u64 c);
 
     void BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                      Shader::PushData& push_data);

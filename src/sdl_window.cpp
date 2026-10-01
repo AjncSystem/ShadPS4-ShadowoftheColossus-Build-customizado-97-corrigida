@@ -251,11 +251,7 @@ void WindowSDL::WaitEvent() {
     case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
         OnGamepadEvent(&event);
         break;
-    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-        LOG_CRITICAL(Frontend, "SOTCEXIT window close requested");
-        break;
     case SDL_EVENT_QUIT:
-        LOG_CRITICAL(Frontend, "SOTCEXIT window received SDL_EVENT_QUIT");
         is_open = false;
         break;
     case SDL_EVENT_QUIT_DIALOG:
