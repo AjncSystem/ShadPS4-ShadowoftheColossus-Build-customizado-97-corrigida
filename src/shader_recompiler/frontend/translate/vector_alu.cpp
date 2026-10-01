@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "shader_recompiler/frontend/opcodes.h"
@@ -730,10 +730,10 @@ void Translator::V_OR_B32(bool is_xor, const GcnInst& inst) {
 }
 
 void Translator::V_BFM_B32(const GcnInst& inst) {
-    // bitmask width
-    const IR::U32 src0{ir.BitFieldExtract(GetSrc(inst.src[0]), ir.Imm32(0), ir.Imm32(4))};
-    // bitmask offset
-    const IR::U32 src1{ir.BitFieldExtract(GetSrc(inst.src[1]), ir.Imm32(0), ir.Imm32(4))};
+    // bitmask width, S0[4:0]
+    const IR::U32 src0{ir.BitFieldExtract(GetSrc(inst.src[0]), ir.Imm32(0), ir.Imm32(5))};
+    // bitmask offset, S1[4:0]
+    const IR::U32 src1{ir.BitFieldExtract(GetSrc(inst.src[1]), ir.Imm32(0), ir.Imm32(5))};
     const IR::U32 ones = ir.ISub(ir.ShiftLeftLogical(ir.Imm32(1), src0), ir.Imm32(1));
     SetDst(inst.dst[0], ir.ShiftLeftLogical(ones, src1));
 }
@@ -796,19 +796,16 @@ void Translator::V_SUBREV_I32(const GcnInst& inst) {
 }
 
 void Translator::V_ADDC_U32(const GcnInst& inst) {
-    // Unsigned components
     const IR::U32 src0{GetSrc(inst.src[0])};
     const IR::U32 src1{GetSrc(inst.src[1])};
     const IR::U32 carry{GetCarryIn(inst)};
-    const IR::Value tmp1{ir.IAddCarry(src0, src1)};
-    const IR::U32 result1{ir.CompositeExtract(tmp1, 0)};
-    const IR::U32 carry_out1{ir.CompositeExtract(tmp1, 1)};
-    const IR::Value tmp2{ir.IAddCarry(result1, carry)};
-    const IR::U32 result2{ir.CompositeExtract(tmp2, 0)};
-    const IR::U32 carry_out2{ir.CompositeExtract(tmp2, 1)};
+    const IR::U32 result1{ir.IAdd(src0, src1)};
+    const IR::U32 result2{ir.IAdd(result1, carry)};
+    const IR::U1 carry_out1{ir.ILessThan(result1, src0, false)};
+    const IR::U1 carry_out2{ir.ILessThan(result2, result1, false)};
     SetDst(inst.dst[0], result2);
 
-    const IR::U1 did_overflow{ir.INotEqual(ir.BitwiseOr(carry_out1, carry_out2), ir.Imm32(0))};
+    const IR::U1 did_overflow{ir.LogicalOr(carry_out1, carry_out2)};
     SetCarryOut(inst, did_overflow);
 }
 
@@ -1379,39 +1376,12 @@ void Translator::V_MAD_U32_U24(const GcnInst& inst) {
     V_MAD_I32_I24(inst, false);
 }
 
-IR::F32 Translator::SelectCubeResult(const IR::F32& x, const IR::F32& y, const IR::F32& z,
-                                     const IR::F32& x_res, const IR::F32& y_res,
-                                     const IR::F32& z_res) {
-    const auto abs_x = ir.FPAbs(x);
-    const auto abs_y = ir.FPAbs(y);
-    const auto abs_z = ir.FPAbs(z);
-
-    const auto z_face_cond{
-        ir.LogicalAnd(ir.FPGreaterThanEqual(abs_z, abs_x), ir.FPGreaterThanEqual(abs_z, abs_y))};
-    const auto y_face_cond{ir.FPGreaterThanEqual(abs_y, abs_x)};
-
-    return IR::F32{ir.Select(z_face_cond, z_res, ir.Select(y_face_cond, y_res, x_res))};
-}
-
 void Translator::V_CUBEID_F32(const GcnInst& inst) {
     const auto x = GetSrc<IR::F32>(inst.src[0]);
     const auto y = GetSrc<IR::F32>(inst.src[1]);
     const auto z = GetSrc<IR::F32>(inst.src[2]);
 
-    IR::F32 result;
-    if (profile.supports_native_cube_calc) {
-        result = ir.CubeFaceIndex(ir.CompositeConstruct(x, y, z));
-    } else {
-        const auto x_neg_cond{ir.FPLessThan(x, ir.Imm32(0.f))};
-        const auto y_neg_cond{ir.FPLessThan(y, ir.Imm32(0.f))};
-        const auto z_neg_cond{ir.FPLessThan(z, ir.Imm32(0.f))};
-        const IR::F32 x_face{ir.Select(x_neg_cond, ir.Imm32(1.f), ir.Imm32(0.f))};
-        const IR::F32 y_face{ir.Select(y_neg_cond, ir.Imm32(3.f), ir.Imm32(2.f))};
-        const IR::F32 z_face{ir.Select(z_neg_cond, ir.Imm32(5.f), ir.Imm32(4.f))};
-
-        result = SelectCubeResult(x, y, z, x_face, y_face, z_face);
-    }
-    SetDst(inst.dst[0], result);
+    SetDst(inst.dst[0], ir.CubeFaceIndex(x, y, z));
 }
 
 void Translator::V_CUBESC_F32(const GcnInst& inst) {
@@ -1419,14 +1389,7 @@ void Translator::V_CUBESC_F32(const GcnInst& inst) {
     const auto y = GetSrc<IR::F32>(inst.src[1]);
     const auto z = GetSrc<IR::F32>(inst.src[2]);
 
-    const auto x_neg_cond{ir.FPLessThan(x, ir.Imm32(0.f))};
-    const auto z_neg_cond{ir.FPLessThan(z, ir.Imm32(0.f))};
-    const IR::F32 x_sc{ir.Select(x_neg_cond, z, ir.FPNeg(z))};
-    const IR::F32 y_sc{x};
-    const IR::F32 z_sc{ir.Select(z_neg_cond, ir.FPNeg(x), x)};
-
-    const auto result{SelectCubeResult(x, y, z, x_sc, y_sc, z_sc)};
-    SetDst(inst.dst[0], result);
+    SetDst(inst.dst[0], ir.CubeFaceCoordS(x, y, z));
 }
 
 void Translator::V_CUBETC_F32(const GcnInst& inst) {
@@ -1434,12 +1397,7 @@ void Translator::V_CUBETC_F32(const GcnInst& inst) {
     const auto y = GetSrc<IR::F32>(inst.src[1]);
     const auto z = GetSrc<IR::F32>(inst.src[2]);
 
-    const auto y_neg_cond{ir.FPLessThan(y, ir.Imm32(0.f))};
-    const IR::F32 x_z_tc{ir.FPNeg(y)};
-    const IR::F32 y_tc{ir.Select(y_neg_cond, ir.FPNeg(z), z)};
-
-    const auto result{SelectCubeResult(x, y, z, x_z_tc, y_tc, x_z_tc)};
-    SetDst(inst.dst[0], result);
+    SetDst(inst.dst[0], ir.CubeFaceCoordT(x, y, z));
 }
 
 void Translator::V_CUBEMA_F32(const GcnInst& inst) {
@@ -1447,13 +1405,7 @@ void Translator::V_CUBEMA_F32(const GcnInst& inst) {
     const auto y = GetSrc<IR::F32>(inst.src[1]);
     const auto z = GetSrc<IR::F32>(inst.src[2]);
 
-    const auto two{ir.Imm32(2.f)};
-    const IR::F32 x_major_axis{ir.FPMul(x, two)};
-    const IR::F32 y_major_axis{ir.FPMul(y, two)};
-    const IR::F32 z_major_axis{ir.FPMul(z, two)};
-
-    const auto result{SelectCubeResult(x, y, z, x_major_axis, y_major_axis, z_major_axis)};
-    SetDst(inst.dst[0], result);
+    SetDst(inst.dst[0], ir.CubeFaceMajorAxis(x, y, z));
 }
 
 void Translator::V_BFE_U32(bool is_signed, const GcnInst& inst) {

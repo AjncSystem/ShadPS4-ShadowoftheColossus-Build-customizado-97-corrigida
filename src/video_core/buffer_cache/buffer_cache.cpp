@@ -105,7 +105,6 @@ void BufferCache::TickFrame() {
     if (std::exchange(fault_process_pending, false)) {
         fault_manager->ProcessFaultBuffer();
     }
-    DebugState.num_batches_per_frame = std::exchange(num_flushes_per_frame, 0u);
 }
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks) {
@@ -300,7 +299,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const u64 last_block = (device_addr + size - 1) >> block_shift;
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
-    sync_batch.Add(device_addr, device_addr + size, is_written);
+    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
     if (is_texel_buffer && !is_written) {
         SynchronizeMemoryFromImage(arena, device_addr, size);
     }
@@ -326,18 +325,7 @@ bool BufferCache::IsRegionCpuModified(VAddr addr, size_t size) {
 }
 
 bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
-    if (memory_tracker->IsRegionGpuModified(addr, size)) {
-        return true;
-    }
-    const VAddr start = Common::AlignDown(addr, BYTES_PER_PAGE);
-    const VAddr end = Common::AlignUp(addr + size, BYTES_PER_PAGE);
-    auto it = std::ranges::upper_bound(sync_batch, start, {}, &SyncRange::end);
-    for (; it != sync_batch.end() && it->start < end; ++it) {
-        if (it->written) {
-            return true;
-        }
-    }
-    return false;
+    return memory_tracker->IsRegionGpuModified(addr, size);
 }
 
 void BufferCache::SynchronizeDmaBuffers() {
@@ -346,7 +334,7 @@ void BufferCache::SynchronizeDmaBuffers() {
         const u64 page = range.start >> (ARENA_PAGE_BITS - block_shift);
         const VAddr device_addr = range.start << block_shift;
         const u64 size = (range.end - range.start) << block_shift;
-        sync_batch.Add(device_addr, device_addr + size, false);
+        SynchronizeMemory(address_space[page], device_addr, size, false, false);
     }
 }
 
@@ -394,7 +382,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
             .resourceOffset = (start - base_block) << block_shift,
             .size = (end - start) << block_shift,
             .memory = backing.memory,
-            .memoryOffset = backing.offset + ((start - backing.start) << block_shift),
+            .memoryOffset = (backing.offset + start - backing.start) << block_shift,
         });
     });
 
@@ -479,7 +467,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         backing.start = range.start;
         backing.end = range.end;
         backing.memory = device_memory;
-        backing.offset = memory_offset;
+        backing.offset = memory_offset >> block_shift;
         resident_ranges.Add(backing);
 
         LOG_INFO(Render, "Making range start={}, end={} resident", backing.start, backing.end);
@@ -502,6 +490,30 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
     staging.Flush();
     runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+}
+
+bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
+                                    bool is_written, bool is_texel_buffer) {
+    boost::container::small_vector<vk::BufferCopy, 4> copies;
+    size_t total_size_bytes{};
+    memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {
+        copies.emplace_back(total_size_bytes, addr, size);
+        total_size_bytes += size;
+    });
+    if (!copies.empty()) {
+        const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
+        for (auto& copy : copies) {
+            memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
+            copy.srcOffset += staging.offset;
+            copy.dstOffset -= arena->cpu_addr;
+        }
+        staging.Flush();
+        runtime.CopyBuffer(staging.buffer, arena, copies);
+    }
+    if (is_texel_buffer && !is_written) {
+        return SynchronizeMemoryFromImage(arena, device_addr, size);
+    }
+    return false;
 }
 
 bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size) {
@@ -615,7 +627,6 @@ void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
                (first_block << block_shift) < hot.addr + hot.size;
     });
     resident_ranges.Subtract(first_block, end_block);
-    sync_batch.Subtract(first_block << block_shift, end_block << block_shift);
     gpu_modified_ranges.Subtract(first_block << block_shift,
                                  (end_block - first_block) << block_shift);
 
@@ -665,98 +676,6 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     pending_binds.clear();
-}
-
-void BufferCache::FlushSyncBatch(bool from_scheduler) {
-    boost::container::small_vector<vk::BufferCopy, 32> copies;
-    size_t total_size_bytes = 0;
-    for (const auto& range : sync_batch) {
-        memory_tracker->ForEachUploadRange(
-            range.start, range.end - range.start, range.written, [&](u64 addr, u64 range_size) {
-                copies.emplace_back(total_size_bytes, addr, range_size);
-                total_size_bytes += range_size;
-            });
-    }
-    sync_batch.Clear();
-    if (copies.empty()) {
-        return;
-    }
-    const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
-    for (auto& copy : copies) {
-        memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
-        copy.srcOffset += staging.offset;
-    }
-    staging.Flush();
-
-    const auto cmdbuf = scheduler.UploadCommandBuffer();
-
-    u32 batch_start = 0;
-    u32 batch_end = 0;
-
-    while (true) {
-        batch_start = batch_end;
-        const auto& copy = copies[batch_start];
-        const auto* arena = address_space[copy.dstOffset >> ARENA_PAGE_BITS];
-
-        const auto expand_batch = [&] {
-            const auto& copy = copies[batch_end];
-            const auto end_page = (copy.dstOffset + copy.size - 1) >> ARENA_PAGE_BITS;
-            return address_space[end_page] == arena;
-        };
-        const auto flush_batch = [&] {
-            const auto regions = std::span{copies}.subspan(batch_start, batch_end - batch_start);
-            for (auto& copy : regions) {
-                copy.dstOffset -= arena->cpu_addr;
-            }
-            cmdbuf.copyBuffer(staging.buffer->Handle(), arena->Handle(), regions);
-        };
-
-        while (batch_end < copies.size() && expand_batch()) {
-            ++batch_end;
-        }
-
-        // No more copies to examine.
-        if (batch_end == copies.size()) {
-            flush_batch();
-            break;
-        }
-
-        // Next copy does not overlap with the current buffer.
-        auto end_copy = copies[batch_end];
-        const auto* end_arena = address_space[end_copy.dstOffset >> ARENA_PAGE_BITS];
-        if (end_arena != arena) {
-            flush_batch();
-            continue;
-        }
-
-        // Next copy partially overlaps with buffer.
-        const auto copy_size = end_arena->cpu_addr + end_arena->size_bytes - end_copy.dstOffset;
-        copies[batch_end].size = copy_size;
-        end_copy.srcOffset += copy_size;
-        end_copy.dstOffset += copy_size;
-        end_copy.size -= copy_size;
-        ++batch_end;
-        flush_batch();
-        --batch_end;
-        copies[batch_end] = end_copy;
-    }
-
-    const vk::MemoryBarrier2 memory_barrier = {
-        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-    };
-    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
-        .dependencyFlags = vk::DependencyFlagBits::eByRegion,
-        .memoryBarrierCount = 1u,
-        .pMemoryBarriers = &memory_barrier,
-    });
-    num_flushes_per_frame++;
-
-    if (!from_scheduler) {
-        scheduler.BeginSession();
-    }
 }
 
 } // namespace VideoCore

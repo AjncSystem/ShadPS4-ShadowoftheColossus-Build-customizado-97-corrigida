@@ -292,7 +292,12 @@ void Translator::S_ADDC_U32(const GcnInst& inst) {
     const IR::U32 src0{GetSrc(inst.src[0])};
     const IR::U32 src1{GetSrc(inst.src[1])};
     const IR::U32 carry{ir.Select(ir.GetScc(), ir.Imm32(1U), ir.Imm32(0U))};
-    SetDst(inst.dst[0], ir.IAdd(ir.IAdd(src0, src1), carry));
+    const IR::U32 result1{ir.IAdd(src0, src1)};
+    const IR::U32 result2{ir.IAdd(result1, carry)};
+    const IR::U1 carry_out1{ir.ILessThan(result1, src0, false)};
+    const IR::U1 carry_out2{ir.ILessThan(result2, result1, false)};
+    SetDst(inst.dst[0], result2);
+    ir.SetScc(ir.LogicalOr(carry_out1, carry_out2));
 }
 
 void Translator::S_MIN_U32(bool is_signed, const GcnInst& inst) {

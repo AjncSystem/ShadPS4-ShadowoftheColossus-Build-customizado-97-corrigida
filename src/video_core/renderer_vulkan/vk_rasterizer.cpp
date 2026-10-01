@@ -111,8 +111,6 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     }
     memory->SetRasterizer(this);
 
-    scheduler.SetSessionCallback([this] { buffer_cache.FlushSyncBatch(true); });
-
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
@@ -700,8 +698,7 @@ void Rasterizer::DispatchDirect() {
         const u64 size = std::min<u64>(sharp.GetSize(), SotcCaptureBytes) & ~3ULL;
         if (sharp.base_address != 0 && size != 0) {
             const u32 state = (buffer_cache.IsRegionCpuModified(sharp.base_address, size) ? 1 : 0) |
-                              (buffer_cache.IsRegionGpuModified(sharp.base_address, size) ? 2 : 0) |
-                              (buffer_cache.IsRegionInSyncBatch(sharp.base_address, size) ? 4 : 0);
+                              (buffer_cache.IsRegionGpuModified(sharp.base_address, size) ? 2 : 0);
             const auto [src, src_offset] = buffer_cache.ObtainBuffer(sharp.base_address, size, false);
             const u32 slot = static_cast<u32>(sotc_capture_seq % SotcCaptureSlots);
             auto& meta = sotc_capture_meta[slot];
@@ -798,7 +795,6 @@ void Rasterizer::OnSubmit() {
 
 void Rasterizer::OnFence() {
     texture_cache.ProcessDownloadImages();
-    buffer_cache.FlushSyncBatch();
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
@@ -817,7 +813,8 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     // A stage whose user data was never attached (e.g. a program restored from the pipeline
     // cache that was not refreshed for this draw) would read its SGPRs from a null span.
     for (const auto* stage : pipeline->GetStages()) {
-        if (stage && stage->user_data.data() == nullptr && stage->ud_mask.mask != 0) {
+        if (stage && stage->user_data.data() == nullptr &&
+            stage->srt_info.flattened_bufsize_dw != 0) {
             LOG_ERROR(Render_Vulkan,
                       "Skipping draw: shader {:#x} (sw stage {}, hw stage {}, info {}) has no "
                       "user data bound",
@@ -836,7 +833,6 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
                           stage->samplers.size());
-        stage->PushUd(binding, push_data);
         BindBuffers(*stage, binding, push_data);
         BindTextures(*stage, binding);
         uses_dma |= stage->uses_dma;
@@ -1212,6 +1208,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {
                 const auto* gds_buf = buffer_cache.GetGdsBuffer();
                 buffer_infos.emplace_back(gds_buf->Handle(), 0, gds_buf->SizeBytes());
+                needs_barrier |=
+                    runtime.IsBufferAccessed(gds_buf, 0, gds_buf->SizeBytes(), desc.is_written);
                 bound_buffers.emplace_back(gds_buf, 0, gds_buf->SizeBytes(), desc.is_written);
             } else if (desc.buffer_type == Shader::BufferType::Flatbuf) {
                 auto& vk_buffer = buffer_cache.GetStreamBuffer();
@@ -1472,6 +1470,18 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
     for (const auto& sampler : stage.samplers) {
         auto ssharp = sampler.GetSharp(stage);
+        if (!ssharp.Valid() || (ssharp.border_color_type.Value() == AmdGpu::BorderColor::Custom &&
+                                liverpool->regs.ta_bc_base.Address() == 0)) {
+            LOG_WARNING(Render_Vulkan,
+                        "Rejecting invalid S# max_aniso={}, filter_mode={}, mip_filter={}, "
+                        "border_color_type={}, border_color_base={:#x}",
+                        static_cast<u32>(ssharp.max_aniso.Value()),
+                        static_cast<u32>(ssharp.filter_mode.Value()),
+                        static_cast<u32>(ssharp.mip_filter.Value()),
+                        static_cast<u32>(ssharp.border_color_type.Value()),
+                        liverpool->regs.ta_bc_base.Address());
+            ssharp = AmdGpu::Sampler{};
+        }
         const auto vk_sampler =
             texture_cache.GetSampler(ssharp, liverpool->regs.ta_bc_base, sampler.is_depth);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
@@ -1668,10 +1678,7 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
                "FillBuffer address and size must be a multiple of 4 bytes");
     if (!is_gds) {
         texture_cache.ClearMeta(address);
-        // A pending upload of this range would pick up the new values for commands recorded
-        // before the fill, so only fill in host memory when nothing queued reads it.
-        if (!buffer_cache.IsRegionGpuModified(address, num_bytes) &&
-            !buffer_cache.IsRegionInSyncBatch(address, num_bytes)) {
+        if (!buffer_cache.IsRegionGpuModified(address, num_bytes)) {
             u32* buffer = std::bit_cast<u32*>(address);
             std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
             return;
@@ -1687,8 +1694,7 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
-    if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes) &&
-        !buffer_cache.IsRegionInSyncBatch(dst, num_bytes)) {
+    if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
             !texture_cache.FindImageFromRange(src, num_bytes)) {
             // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
