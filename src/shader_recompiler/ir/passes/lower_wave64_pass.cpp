@@ -226,7 +226,14 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                 if (lane < profile.subgroup_size) {
                     continue;
                 }
-                if (const auto identity = ReductionIdentity(inst.Arg(0))) {
+                // SOTC_WAVE64_IDENTITY=0 restores the plain fold (for A/B comparisons).
+                static const bool identity_enabled = [] {
+                    const char* v = std::getenv("SOTC_WAVE64_IDENTITY");
+                    return v ? std::atoi(v) != 0 : true;
+                }();
+                const auto identity =
+                    identity_enabled ? ReductionIdentity(inst.Arg(0)) : std::optional<u32>{};
+                if (identity) {
                     inst.ReplaceUsesWithAndRemove(IR::Value{*identity});
                 } else {
                     inst.SetArg(1, IR::Value{lane % profile.subgroup_size});
