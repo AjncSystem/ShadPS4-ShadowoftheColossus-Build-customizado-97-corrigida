@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include "common/io_file.h"
 #include "common/path_util.h"
 #include "core/emulator_settings.h"
@@ -21,6 +22,12 @@
 #include <magic_enum/magic_enum.hpp>
 
 namespace Shader::Gcn {
+
+// SHADPS4_ABSOLUTE_INSTANCE_ID=1 restores the old absolute instance ID (A/B tests).
+static bool RelativeInstanceIdEnabled() {
+    static const bool enabled = std::getenv("SHADPS4_ABSOLUTE_INSTANCE_ID") == nullptr;
+    return enabled;
+}
 
 static IR::VectorReg IterateBarycentrics(const RuntimeInfo& runtime_info, auto&& set_attribute) {
     if (runtime_info.hw_stage != HwStage::Fragment) {
@@ -110,6 +117,22 @@ void Translator::EmitPrologue(IR::Block* first_block) {
                             ir.GetAttributeU32(IR::Attribute::BaseInstance));
         }
 
+        // The GCN instance ID VGPRs count from 0 in every draw: the start instance reaches the
+        // shader only through a user SGPR (or memory the shader reads itself). gl_InstanceIndex
+        // includes firstInstance, so subtract it. Without this an indirect draw with a nonzero
+        // start instance indexes past its data: SotC's sun-shaft particles (vs 0x80de1361,
+        // firstInstance 3409) read stale particles and drew screen-sized triangles that lit up
+        // the fog (white flashes over the bird boss lake).
+        const auto relative_instance_id = [&] {
+            IR::U32 id = ir.GetAttributeU32(IR::Attribute::InstanceId);
+            if (RelativeInstanceIdEnabled() &&
+                !(base_instance_sgpr != -1 && fetch_data.Empty() &&
+                  fetch_data.instance_offset_sgpr != -1)) {
+                id = ir.ISub(id, ir.GetAttributeU32(IR::Attribute::BaseInstance));
+            }
+            return id;
+        };
+
         // v0: vertex ID, always present
         IR::U32 vertex_id = ir.GetAttributeU32(IR::Attribute::VertexId);
         if (base_vertex_sgpr != -1) {
@@ -136,7 +159,7 @@ void Translator::EmitPrologue(IR::Block* first_block) {
             if (runtime_info.props.num_input_vgprs > 0) {
                 if (runtime_info.sw.vs.step_rate_0 != 0) {
                     ir.SetVectorReg(dst_vreg++,
-                                    ir.IDiv(ir.GetAttributeU32(IR::Attribute::InstanceId),
+                                    ir.IDiv(relative_instance_id(),
                                             ir.Imm32(runtime_info.sw.vs.step_rate_0)));
                 } else {
                     ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
@@ -146,7 +169,7 @@ void Translator::EmitPrologue(IR::Block* first_block) {
             if (runtime_info.props.num_input_vgprs > 1) {
                 if (runtime_info.sw.vs.step_rate_1 != 0) {
                     ir.SetVectorReg(dst_vreg++,
-                                    ir.IDiv(ir.GetAttributeU32(IR::Attribute::InstanceId),
+                                    ir.IDiv(relative_instance_id(),
                                             ir.Imm32(runtime_info.sw.vs.step_rate_1)));
                 } else {
                     ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
@@ -165,6 +188,8 @@ void Translator::EmitPrologue(IR::Block* first_block) {
                     ASSERT_MSG(fetch_data.instance_offset_sgpr == base_instance_sgpr,
                                "Fetch shader in indirect draw uses wrong base instance");
                 }
+            } else if (RelativeInstanceIdEnabled()) {
+                instance_id = relative_instance_id();
             }
             ir.SetVectorReg(dst_vreg++, instance_id);
         }

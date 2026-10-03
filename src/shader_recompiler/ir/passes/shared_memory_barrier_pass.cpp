@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <queue>
 #include <unordered_set>
+#include "common/elf_info.h"
 #include "shader_recompiler/ir/breadth_first_search.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/ir_emitter.h"
@@ -26,8 +28,17 @@ static bool IsWriteShared(const IR::Inst& inst) {
            opcode == IR::Opcode::WriteSharedU64;
 }
 
+// Workgroup barrier, or a subgroup one for workgroups of several waves (see below).
+static void EmitSync(IR::IREmitter& ir, bool subgroup) {
+    if (subgroup) {
+        ir.SubgroupBarrier();
+    } else {
+        ir.Barrier();
+    }
+}
+
 // Inserts barriers when a shared memory write and read occur in the same basic block.
-static void EmitBarrierInBlock(IR::Block* block) {
+static void EmitBarrierInBlock(IR::Block* block, bool subgroup) {
     enum class BarrierAction : u32 {
         None,
         BarrierOnWrite,
@@ -38,7 +49,7 @@ static void EmitBarrierInBlock(IR::Block* block) {
         if (IsLoadShared(inst)) {
             if (action == BarrierAction::BarrierOnRead) {
                 IR::IREmitter ir{*block, IR::Block::InstructionList::s_iterator_to(inst)};
-                ir.Barrier();
+                EmitSync(ir, subgroup);
             }
             action = BarrierAction::BarrierOnWrite;
             continue;
@@ -46,29 +57,31 @@ static void EmitBarrierInBlock(IR::Block* block) {
         if (IsWriteShared(inst)) {
             if (action == BarrierAction::BarrierOnWrite) {
                 IR::IREmitter ir{*block, IR::Block::InstructionList::s_iterator_to(inst)};
-                ir.Barrier();
+                EmitSync(ir, subgroup);
             }
             action = BarrierAction::BarrierOnRead;
         }
     }
     if (action != BarrierAction::None) {
         IR::IREmitter ir{*block, --block->end()};
-        ir.Barrier();
+        EmitSync(ir, subgroup);
     }
 }
 
 using NodeSet = std::unordered_set<const IR::Block*>;
 
-static void EmitBarrierAtBlockStart(IR::Block* block) {
+static void EmitBarrierAtBlockStart(IR::Block* block, bool subgroup) {
     auto insert_point = std::ranges::find_if_not(block->Instructions(), IR::IsPhi);
     IR::IREmitter ir{*block, insert_point};
-    ir.Barrier();
+    EmitSync(ir, subgroup);
 }
 
 struct DivergenceContext {
     // Blocks whose ReadLane with a constant lane the wave64 lowering turns into a
     // workgroup-uniform value (an exchange through LDS).
     std::unordered_set<const IR::Block*> uniform_readlane_blocks;
+    // Synchronize host subgroups only (workgroups larger than one wave).
+    bool subgroup{};
 };
 
 // A condition is divergent when it depends on LocalInvocationId. With uniform_readlane_blocks,
@@ -122,7 +135,7 @@ static void EmitBarrierInMergeBlock(const IR::AbstractSyntaxNode::Data& data,
     const IR::U1 cond = data.if_node.cond;
     if (IsDivergent(cond, ctx)) {
         if (divergence_depth == 0) {
-            EmitBarrierAtBlockStart(data.if_node.merge);
+            EmitBarrierAtBlockStart(data.if_node.merge, ctx.subgroup);
         }
         ++divergence_depth;
         divergence_end.emplace(data.if_node.merge);
@@ -155,6 +168,23 @@ static NodeSet FindDivergentLoops(const IR::AbstractSyntaxList& syntax_list,
 
 static constexpr u32 GcnSubgroupSize = 64;
 
+// Workgroups of several waves synchronize with s_barrier between waves, but the last steps of a
+// reduction (s[tid] += s[tid + 16] for tid < 16, ...) run inside one wave and rely on its lanes
+// executing in lockstep. A host subgroup of 32 does not guarantee that, and the compiler may
+// reorder the loads of other lanes' values: SotC's auto-exposure averaged its luminance history
+// to 0.78 instead of 2.06. Those workgroups get subgroup barriers at the same points (a workgroup
+// barrier there would also wait on the other waves, which the guest code never does).
+// SotC only; SOTC_LDS_BARRIERS=0/1 overrides.
+static bool MultiWaveLdsBarriersEnabled() {
+    static const bool enabled = [] {
+        if (const char* v = std::getenv("SOTC_LDS_BARRIERS")) {
+            return std::atoi(v) != 0;
+        }
+        return Common::ElfInfo::Instance().GameSerial() == "CUSA08809";
+    }();
+    return enabled;
+}
+
 void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_info,
                              const Profile& profile) {
     if (program.info.hw_stage != HwStage::Compute) {
@@ -166,13 +196,18 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
         cs_info.workgroup_size[0] * cs_info.workgroup_size[1] * cs_info.workgroup_size[2];
     // The compiler can only omit barriers when the local workgroup size is the same as the HW
     // subgroup.
-    if (shared_memory_size == 0 || threadgroup_size != GcnSubgroupSize ||
+    const bool multi_wave = threadgroup_size > GcnSubgroupSize &&
+                            threadgroup_size % GcnSubgroupSize == 0 &&
+                            MultiWaveLdsBarriersEnabled();
+    if (shared_memory_size == 0 || (threadgroup_size != GcnSubgroupSize && !multi_wave) ||
         !profile.needs_lds_barriers) {
         return;
     }
     using Type = IR::AbstractSyntaxNode::Type;
     DivergenceContext ctx;
-    if (Wave64UniformBranchesEnabled()) {
+    ctx.subgroup = multi_wave;
+    // A ReadLane is uniform within one wave, not across the waves of a larger workgroup.
+    if (!multi_wave && Wave64UniformBranchesEnabled()) {
         const auto blocks = FindWave64UniformBlocks(program);
         ctx.uniform_readlane_blocks.insert(blocks.begin(), blocks.end());
     }
@@ -200,12 +235,12 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
             ASSERT(divergence_depth > 0);
             --divergence_depth;
             if (divergence_depth == 0) {
-                EmitBarrierAtBlockStart(node.data.repeat.merge);
+                EmitBarrierAtBlockStart(node.data.repeat.merge, ctx.subgroup);
             }
             continue;
         }
         if (node.type == Type::Block && divergence_depth == 0) {
-            EmitBarrierInBlock(node.data.block);
+            EmitBarrierInBlock(node.data.block, ctx.subgroup);
         }
     }
 }

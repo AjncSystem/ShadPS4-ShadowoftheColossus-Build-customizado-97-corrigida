@@ -20,6 +20,7 @@ OPCODE(ReadConstBuffer,                                     U32,            Opaq
 // Barriers
 OPCODE(Barrier,                                             Void,                                                                                           )
 OPCODE(WorkgroupMemoryBarrier,                              Void,                                                                                           )
+OPCODE(SubgroupBarrier,                                     Void,                                                                                           )
 OPCODE(DeviceMemoryBarrier,                                 Void,                                                                                           )
 
 // Geometry shader specific

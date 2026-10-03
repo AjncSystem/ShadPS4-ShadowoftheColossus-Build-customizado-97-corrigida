@@ -33,6 +33,16 @@ void EmitBarrier(EmitContext& ctx) {
                          ctx.ConstU32(static_cast<u32>(memory_semantics)));
 }
 
+// Synchronizes the invocations of one host subgroup (like __syncwarp) and orders their shared
+// memory accesses: what a GCN wave gets for free from executing in lockstep.
+void EmitSubgroupBarrier(EmitContext& ctx) {
+    const auto semantics{spv::MemorySemanticsMask::AcquireRelease |
+                         spv::MemorySemanticsMask::WorkgroupMemory};
+    ctx.OpControlBarrier(ctx.ConstU32(static_cast<u32>(spv::Scope::Subgroup)),
+                         ctx.ConstU32(static_cast<u32>(spv::Scope::Workgroup)),
+                         ctx.ConstU32(static_cast<u32>(semantics)));
+}
+
 void EmitWorkgroupMemoryBarrier(EmitContext& ctx) {
     MemoryBarrier(ctx, spv::Scope::Workgroup);
 }
