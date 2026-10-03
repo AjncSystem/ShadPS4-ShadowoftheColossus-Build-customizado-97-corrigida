@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0}</style></head><body>
+<title>SotC shadPS4 Fixes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; summary table first, then fix entries grouped by subsystem; PT/EN toggle swaps whole articles. */
+:root {
+  --bg: #f3f4f1;          /* misty stone */
+  --surface: #ffffff;
+  --fg: #1f2420;
+  --muted: #5b6359;
+  --line: #d6dad2;
+  --accent: #4d6b3c;      /* moss */
+  --accent-soft: #e3ebdc;
+  --warn: #8a5a12;
+  --warn-soft: #f5ead6;
+  --info: #2f5d7a;
+  --info-soft: #dfeaf1;
+  --code-bg: #eceee9;
+  --font-display: "Archivo", "Segoe UI", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a17; --surface: #1e231f; --fg: #e4e8e1; --muted: #a1a99d; --line: #333a33;
+    --accent: #9fc285; --accent-soft: #263222; --warn: #e2b46a; --warn-soft: #33291a;
+    --info: #8cc0e0; --info-soft: #1c2a33; --code-bg: #252b26; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a17; --surface: #1e231f; --fg: #e4e8e1; --muted: #a1a99d; --line: #333a33;
+  --accent: #9fc285; --accent-soft: #263222; --warn: #e2b46a; --warn-soft: #33291a;
+  --info: #8cc0e0; --info-soft: #1c2a33; --code-bg: #252b26; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 920px; margin: 0 auto; padding-inline: 20px; padding-block: 32px 64px; }
+header.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; border-bottom: 2px solid var(--fg); padding-bottom: 18px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
+h1 { font-family: var(--font-display); font-weight: 800; font-size: clamp(28px, 5vw, 42px); line-height: 1.05; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.lang { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.lang button { font: 600 14px var(--font-body); padding: 7px 14px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.lang button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.lang button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 24px; margin: 20px 0 8px; font-size: 14px; }
+.meta div { min-width: 0; }
+.meta dt { font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.meta dd { margin: 0 0 8px; }
+h2 { font-family: var(--font-display); font-weight: 700; font-size: 24px; margin: 44px 0 6px; text-wrap: balance; }
+h2 small { font-family: var(--font-mono); font-weight: 400; font-size: 13px; color: var(--muted); margin-left: 8px; }
+.lead { color: var(--muted); max-width: 68ch; margin: 0 0 16px; }
+p { max-width: 70ch; }
+code, .mono { font-family: var(--font-mono); font-size: .88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.good { color: var(--accent); font-weight: 600; }
+.fixes { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--line); }
+.fix { display: grid; grid-template-columns: 3.2rem 1fr; gap: 0 14px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.fix .id { font-family: var(--font-mono); font-size: 13px; color: var(--muted); padding-top: 3px; font-variant-numeric: tabular-nums; }
+.fix > div { min-width: 0; }
+.fix h3 { font-family: var(--font-body); font-weight: 600; font-size: 17px; margin: 0 0 6px; line-height: 1.35; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em; padding: 2px 7px; border-radius: 3px; white-space: nowrap; }
+.tag.up { background: var(--accent-soft); color: var(--accent); }
+.tag.sotc { background: var(--warn-soft); color: var(--warn); }
+.tag.pink { background: var(--info-soft); color: var(--info); }
+.fix dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; font-size: 14.5px; }
+.fix dt { font-weight: 600; color: var(--muted); }
+.fix dd { margin: 0; min-width: 0; }
+.commits { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
+.note { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 10px 14px; border-radius: 0 4px 4px 0; font-size: 14.5px; max-width: 70ch; }
+ul.plain { padding-left: 1.2em; margin: 8px 0; }
+ul.plain li { margin: 3px 0; max-width: 70ch; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--muted); }
+a { color: var(--accent); }
+@media (max-width: 560px) {
+  .fix { grid-template-columns: 1fr; }
+  .fix .id { padding: 0 0 2px; }
+  .fix dl { grid-template-columns: 1fr; }
+  .fix dt { margin-top: 4px; }
+}
+@media (prefers-reduced-motion: no-preference) { .lang button { transition: background .15s, color .15s; } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div>
+    <p class="eyebrow">shadPS4 · CUSA08809 · Windows</p>
+    <h1>Shadow of the Colossus no shadPS4</h1>
+  </div>
+  <div class="lang" role="group" aria-label="Idioma / Language">
+    <button type="button" id="btn-pt" data-lang="pt" aria-pressed="true">PT-BR</button>
+    <button type="button" id="btn-en" data-lang="en" aria-pressed="false">EN</button>
+  </div>
+</header>
+
+<!-- ============================ PORTUGUÊS ============================ -->
+<article id="pt" lang="pt-BR">
+<dl class="meta">
+  <div><dt>Jogo</dt><dd>Shadow of the Colossus, CUSA08809 (EU) v1.01</dd></div>
+  <div><dt>Base</dt><dd>shadPS4 <code>259e815a</code> (main, set/2026)</dd></div>
+  <div><dt>Ramo</dt><dd><code>sotc-windows-fixes</code> @ <code>1547360c</code>, 53 commits</dd></div>
+  <div><dt>Máquina de teste</dt><dd>Windows 11, i9-13900K (sem SSE4a), RTX 2060 SUPER 8 GB</dd></div>
+</dl>
+
+<h2>Resumo</h2>
+<p class="lead">Ao começar, o jogo travava a GPU na abertura (TDR), caía em silêncio ao pular o vídeo e ao carregar o save, mostrava o menu sem texto e rodava a 13–15 FPS no mundo aberto. Hoje ele roda do boot ao gameplay sem quedas nos testes automatizados.</p>
+<div class="tablewrap"><table>
+  <thead><tr><th>Medida</th><th>Antes</th><th>Depois</th></tr></thead>
+  <tbody>
+    <tr><td>Quedas ao pular a abertura / carregar o save</td><td class="num">2–6 em 10 sessões</td><td class="num good">0 em 20, depois 10/10 limpas</td></tr>
+    <tr><td>Travamento da GPU (TDR) na abertura</td><td class="num">toda execução</td><td class="num good">nenhum</td></tr>
+    <tr><td>FPS no mundo aberto</td><td class="num">13–15</td><td class="num good">17–18</td></tr>
+    <tr><td>Espera da CPU pela GPU, por quadro</td><td class="num">~28 ms</td><td class="num good">8–13 ms</td></tr>
+    <tr><td>Sincronizações de readback a cada 100 quadros</td><td class="num">~7.600</td><td class="num good">~1.000</td></tr>
+    <tr><td>Capturas com blocos pretos (DOF)</td><td class="num">21 de 48</td><td class="num good">0 de 32</td></tr>
+    <tr><td>Volume de névoa com NaN (raios de luz)</td><td class="num">66%</td><td class="num good">corrigido</td></tr>
+    <tr><td>Brilho médio da cena no lago do pássaro</td><td class="num">37–109</td><td class="num good">&lt; 0,8</td></tr>
+  </tbody>
+</table></div>
+
+<h2>Como ler</h2>
+<div class="tags"><span class="tag up">candidato upstream</span><span class="tag sotc">específico SotC / workaround</span><span class="tag pink">portado do Pink-shadPS4</span></div>
+<p class="lead">"Candidato upstream" marca correções genéricas, que devem ajudar outros jogos no Windows. As específicas ficam restritas ao serial <code>CUSA08809</code> e têm uma variável <code>SOTC_*</code> para ligar ou desligar.</p>
+
+<h2>Núcleo e Windows <small>CPU, exceções, pilhas</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">01</div><div>
+    <h3>Instruções SSE4a curtas destruíam a red zone do jogo</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>Pose NaN, colisão quebrada e crash por volta de 35 s (<code>eboot+0xF42CE0</code>), só em CPUs Intel no Windows.</dd>
+    <dt>Causa</dt><dd>Sem SSE4a, EXTRQ/INSERTQ são emulados. As de 4 bytes não cabem num jmp e iam para o tratador de exceção. No Windows, a entrega da exceção escreve abaixo do RSP e apaga a red zone de 128 bytes que o código do jogo lê logo depois. Linux pula a red zone e CPUs AMD têm SSE4a nativo.</dd>
+    <dt>Solução</dt><dd><code>PatchShortSse4aInstructions</code> realoca as instruções curtas para um trampolim (36 sítios no eboot).</dd></dl>
+    <div class="commits">87695648 · cpu_patches.cpp, module.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">02</div><div>
+    <h3>Tratador de falhas roda numa pilha alternativa</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>O processo morria sem log, sem dump e sem handler, por volta de 1 em cada 3 sessões longas.</dd>
+    <dt>Causa</dt><dd>O SotC roda jobs em centenas de pilhas de fibra de 16 KB, contíguas e sem guard page. No Windows, o tratador de falhas (rastreamento de páginas e readback) roda na pilha que falhou e estourava para a pilha vizinha.</dd>
+    <dt>Solução</dt><dd>Pilha alternativa de 512 KB por thread (<code>shad_call_on_stack</code>), trocando <code>StackBase/StackLimit</code> do TEB durante a chamada.</dd></dl>
+    <div class="commits">d5c6d6d4 · signals.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">03</div><div>
+    <h3>Pilhas de thread e fibra nunca ficam protegidas</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd>Faixas de memória rastreadas pela GPU cobriam pilhas do guest. Uma falha cujo frame de exceção não pode ser escrito abaixo do RSP mata o processo antes de qualquer handler. Ao carregar o save, um AV em <code>sceFiberLongJmp</code> escrevia na pilha de destino protegida.</dd>
+    <dt>Solução</dt><dd>Registro de pilhas com contagem de referência (interval_map, margem de 16 KB) que o page manager nunca protege, e <code>EnsureStackWritable</code> antes de todo long jump ou entrada de fibra. Quedas ao carregar: de 2–6/10 para 0/20.</dd></dl>
+    <div class="commits">06bead25 · 328c29e5 · page_manager.cpp, pthread.cpp, stack.cpp, fiber.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">04</div><div>
+    <h3>SplitRegion apagava as proteções de página</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>A GPU usava dados velhos (loops infinitos em compute, TDR) e o readback sobrescrevia o heap (crash no alocador do jogo).</dd>
+    <dt>Causa</dt><dd><code>AddressSpace::SplitRegion</code> desmapeia e remapeia as views vizinhas com a proteção original (RW). Isso descartava em silêncio o rastreamento de centenas de MB, e escritas da CPU deixavam de ser detectadas.</dd>
+    <dt>Solução</dt><dd>Callback de remapeamento que chama <code>PageManager::ReapplyProtection</code> nas páginas recriadas.</dd></dl>
+    <div class="commits">9df0b674 · d97450cc · address_space.cpp, page_manager.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">05</div><div>
+    <h3>Proteção seletiva de red zone</h3>
+    <div class="tags"><span class="tag sotc">específico SotC</span></div>
+    <dl><dt>Causa</dt><dd>Duas funções do jogo (<code>eboot+0xEDFB30</code> e <code>+0xF67D2B</code>) guardam ponteiros abaixo do RSP dentro de loops que tocam memória rastreada. A exceção do modo de readback preciso apagava esses ponteiros. O patch estático global de red zone é instável (2 em 8 sessões).</dd>
+    <dt>Solução</dt><dd>Patch estático só nas funções listadas, por serial; <code>SHADPS4_REDZONE_PROTECT</code> permite listar outras.</dd></dl>
+    <div class="commits">1d3fdfeb · f4d7f868 · module.cpp</div>
+  </div></div>
+</div>
+
+<h2>Vulkan e sincronização <small>quedas e travamentos de GPU</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">06</div><div>
+    <h3>Máscara de estágio para cada semáforo de espera</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd><code>SubmitInfo</code> aceita até 4 waits, mas só havia 2 máscaras de estágio; a 3ª e a 4ª eram lidas fora do array, causando stall ou deadlock.</dd>
+    <dt>Solução</dt><dd>Array com 4 máscaras e <code>static_assert</code> amarrado ao tamanho de <code>wait_semas</code>.</dd></dl>
+    <div class="commits">671eae23 · vk_scheduler.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">07</div><div>
+    <h3>Device lost não congela mais o emulador</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd><code>Semaphore::Wait</code> repetia <code>waitSemaphores</code> para sempre após uma perda de dispositivo.</dd>
+    <dt>Solução</dt><dd>Detecta <code>eErrorDeviceLost</code>, registra os detalhes via <code>VK_EXT_device_fault</code> e encerra.</dd></dl>
+    <div class="commits">824fd094 · 286ebb69 · vk_semaphore.cpp, vk_instance.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">08</div><div>
+    <h3>Cópia de profundidade entre formatos diferentes passa por buffer</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>Device lost (WriteInvalid) ao pular o vídeo de abertura.</dd>
+    <dt>Causa</dt><dd><code>Runtime::CopyColorAndDepth</code> emitia <code>vkCmdCopyImage</code> de D32 para D32S8, uma cópia inválida (apontada pela validação de sincronização).</dd>
+    <dt>Solução</dt><dd>Cópias depth→depth com formatos diferentes usam <code>CopyImageWithBuffer</code>.</dd></dl>
+    <div class="commits">762fe685 · vk_runtime.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">09</div><div>
+    <h3>Estágios vazavam entre pipelines restauradas do cache</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>Crash por volta do quadro 90–150: draw com shader sem user data.</dd>
+    <dt>Solução</dt><dd>O carregamento do cache limpa os estágios por pipeline; entradas corrompidas são ignoradas em vez de abortar; draws com user data nulo são pulados.</dd></dl>
+    <div class="commits">051b6076 · c39ae599 · vk_pipeline_cache.cpp, vk_rasterizer.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">10</div><div>
+    <h3>Coerência de leituras de função fixa e de fences</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd>Argumentos indiretos e buffers de vértice/índice não eram registrados como leituras, então um <code>WRITE_DATA</code> seguinte não esperava o draw. Fences EOP/EOS escritas direto na memória não invalidavam a cópia já enviada à GPU.</dd>
+    <dt>Solução</dt><dd>Leituras de função fixa entram no rastreamento de barreiras; <code>Liverpool::WriteFenceValue</code> invalida antes de escrever.</dd></dl>
+    <div class="commits">c1ba2740 · d2a414ff · vk_rasterizer.cpp, liverpool.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">11</div><div>
+    <h3>Memória de vídeo esgotada não aborta</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd>As arenas do buffer cache nunca são liberadas e competem com as texturas; em placas de 8 GB, alocações falhavam e o emulador abortava.</dd>
+    <dt>Solução</dt><dd>Imagens e buffers repetem a alocação fora do orçamento; arenas recorrem à RAM; coleta de emergência de texturas; GC agressivo a partir de 60% do orçamento. Bindings read-only gigantes ou com tamanho lixo ficam limitados a 64 MB; endereços não mapeados recebem binding nulo.</dd></dl>
+    <div class="commits">13727b94 · d5c6d6d4 · c0c37d96 · ae2bb90f · buffer_cache.cpp, texture_cache.cpp, image.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">12</div><div>
+    <h3>Deadlock entre tratador de falhas e texture cache</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd><code>MarkAsMaybeDirty</code> calculava hash da memória do guest com o mutex do cache: ler uma página protegida falhava de novo e esperava a thread da GPU, que esperava o mutex.</dd>
+    <dt>Solução</dt><dd>Sem hash nesse caminho; <code>RefreshImage</code> já recalcula na thread da GPU.</dd></dl>
+    <div class="commits">d5c6d6d4 · texture_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">13</div><div>
+    <h3>Buffer de walkers SRT estourava com cache grande</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>O emulador caía no boot, mas só com o cache de pipelines de quem já jogou bastante.</dd>
+    <dt>Causa</dt><dd>Todos os walkers do cache são carregados no início; com os walkers maiores (item 21), passaram de 32 MB e o Xbyak lançou exceção não tratada.</dd>
+    <dt>Solução</dt><dd>Buffer de 256 MB (páginas não tocadas não custam nada); um walker que não cabe descarta o programa do cache (recompilado) em vez de lançar.</dd></dl>
+    <div class="commits">c728e483 · flatten_extended_userdata_pass.cpp, vk_pipeline_serialization.cpp</div>
+  </div></div>
+</div>
+
+<h2>Recompilador de shaders</h2>
+<div class="fixes">
+  <div class="fix"><div class="id">14</div><div>
+    <h3>ReadLane wave64 em GPUs de subgrupo 32</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span><span class="tag pink">identidades do Pink</span></div>
+    <dl><dt>Causa</dt><dd>O código GCN lê lanes 32–63 (o <code>readlane 32</code> que junta as metades de uma redução). Na NVIDIA o índice cai fora do subgrupo, o que é indefinido; dobrar para a metade inferior soma duas vezes.</dd>
+    <dt>Solução</dt><dd>Índices constantes ficam dentro do subgrupo do host; em workgroups ≤ 32 threads, a lane ausente de uma redução vira a identidade da operação (0 para soma, +∞ para mínimo etc.).</dd></dl>
+    <div class="commits">6f06164f · 16226114 · lower_wave64_pass.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">15</div><div>
+    <h3>Ramos uniformes wave64 e barreiras LDS</h3>
+    <div class="tags"><span class="tag pink">portado do Pink</span><span class="tag sotc">ligado só no SotC</span></div>
+    <dl><dt>Solução</dt><dd>ReadLane/Ballot dentro de ramos uniformes no workgroup também são rebaixados, e o passe de barreiras de LDS deixa de tratar como divergente uma condição que depende só de ReadLane uniforme (faixas na iluminação). <code>SOTC_WAVE64_UNIFORM</code>.</dd></dl>
+    <div class="commits">16226114 · lower_wave64_pass.cpp, shared_memory_barrier_pass.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">16</div><div>
+    <h3>Testes de profundidade antes do pixel shader (retângulos no chão)</h3>
+    <div class="tags"><span class="tag pink">portado do Pink</span><span class="tag sotc">ligado só no SotC</span></div>
+    <dl><dt>Sintoma</dt><dd>Retângulos escuros no chão e estruturas aparecendo através do cenário.</dd>
+    <dt>Causa</dt><dd>O GCN testa profundidade/estêncil antes do pixel shader quando <code>DB_SHADER_CONTROL.Z_ORDER</code> pede. No Vulkan, um shader com escrita em storage precisa de <code>EarlyFragmentTests</code>; sem isso, os decalques deferidos pintavam a caixa inteira no G-buffer.</dd>
+    <dt>Solução</dt><dd>Modo <code>EarlyFragmentTests</code> quando Z_ORDER é early, o shader escreve em storage e não há discard nem export de profundidade/estêncil/máscara (53 shaders no SotC). <code>SOTC_EARLY_Z</code>.</dd></dl>
+    <div class="commits">16226114 · emit_spirv.cpp, vk_pipeline_cache.cpp, runtime_info.h</div>
+  </div></div>
+  <div class="fix"><div class="id">17</div><div>
+    <h3>ReadConst com índice dinâmico (blocos pretos)</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Causa</dt><dd>O DOF de primeiro plano (<code>0x5edac7be</code>) lê offsets com índice de runtime; sem acesso direto à memória, toda leitura dinâmica devolvia <code>flatbuf[0]</code>, então amostras nulas viravam blocos pretos.</dd>
+    <dt>Solução</dt><dd>O walker SRT copia uma janela de 512 dwords da tabela e o shader indexa nela.</dd></dl>
+    <div class="commits">609b4dd2 · flatten_extended_userdata_pass.cpp, emit_spirv_context_get_set.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">18</div><div>
+    <h3>Outras correções do recompilador</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <ul class="plain">
+      <li>Semântica de multiplicação legada em <code>V_MAC/V_MAD_LEGACY_F32</code> (0 × ∞ = 0). <span class="mono">ba215a90</span></li>
+      <li>Endereçamento de buffer por thread id em estágios gráficos (assert no quadro ~2400). <span class="mono">0ce1718a</span></li>
+      <li>Formatos e swizzles lixo em descritores não abortam mais. <span class="mono">8340afd6</span></li>
+      <li>Orçamento de iterações de loop por invocação, contra loops infinitos que causam TDR (8192 no SotC, <code>SHADPS4_LOOP_LIMIT</code>). <span class="mono">bfa42a59</span></li>
+      <li>Walkers SRT restaurados do cache também cobertos pelo tratador de falhas. <span class="mono">aa0dbba9</span></li>
+    </ul>
+  </div></div>
+  <div class="fix"><div class="id">24</div><div>
+    <h3>Comparações negadas com NaN (raios de luz apagados)</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>Dentro do templo, a névoa virava um véu cinza e lavado, e os feixes de luz sumiam.</dd>
+    <dt>Causa</dt><dd><code>V_CMP(X)_N{GE,GT,LE,EQ,LT,LG}_F32/F64</code> negam a comparação e são <em>verdadeiras</em> quando um operando é NaN. O recompilador as traduzia para a comparação ordenada oposta (<code>NGE</code> → <code>LT</code>), que é <em>falsa</em> com NaN. O SotC grava NaN de propósito (<code>0xFFFFFFFF</code>) como marcador de "oculto" nos froxels atrás da geometria e o testa assim ao misturar o histórico temporal da névoa. O marcador vazava para o histórico (66% do volume) e nunca mais saía.</dd>
+    <dt>Solução</dt><dd>As comparações negadas usam as variantes não ordenadas do IR (<code>FPUnord*</code>). Também: <code>V_MIN/V_MAX/V_MED3</code> e o modificador clamp emitem <code>NMin/NMax</code> (no GCN devolvem o outro operando com NaN; <code>SHADPS4_IEEE_MINMAX=1</code> volta ao antigo). Achado com RenderDoc: captura no local, dump do volume 160×90×64 e depuração da thread até a primeira instrução que gera NaN.</dd></dl>
+    <div class="commits">d471a277 · vector_alu.cpp, translate.h, emit_spirv_floating_point.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">25</div><div>
+    <h3>Instance ID relativo ao início do desenho (clarões no lago do pássaro)</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Sintoma</dt><dd>No lago do colosso pássaro, clarões brancos em forma de cruz (a silhueta do pássaro) e pontos brancos piscando no horizonte sempre que o boss voava. O Pink-shadPS4 tem o mesmo defeito.</dd>
+    <dt>Causa</dt><dd>No GCN, os VGPRs de instance ID começam em 0 em cada desenho; o início (start instance) só chega ao shader por um SGPR ou por memória que o próprio shader lê. O recompilador usava <code>gl_InstanceIndex</code>, que já inclui <code>firstInstance</code>. As partículas dos raios de sol (vs <code>0x80de1361</code>, <code>DrawIndirect</code> com <code>firstInstance</code> 3409) somam o início lido da memória, então liam a partícula 3409 + 3409 + n: dados velhos que viravam triângulos do tamanho da tela na textura de visibilidade do sol (8 camadas de 160×90). A névoa volumétrica acumulava isso até 1.800.</dd>
+    <dt>Solução</dt><dd>O instance ID passa a ser relativo (<code>gl_InstanceIndex − gl_BaseInstance</code>), exceto quando o fetch shader soma o SGPR de início por conta própria. <code>SHADPS4_ABSOLUTE_INSTANCE_ID=1</code> volta ao antigo. Brilho médio medido no lago: 37–109 → abaixo de 0,8. Achado despejando as imagens reais das passadas da névoa durante o jogo (<code>SOTC_DUMP</code>) e comparando um quadro normal com um quadro branco etapa por etapa.</dd></dl>
+    <div class="commits">7d795cff · translate.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">26</div><div>
+    <h3>Barreiras de subgrupo em reduções LDS de grupos com várias waves</h3>
+    <div class="tags"><span class="tag sotc">específico SotC / workaround</span></div>
+    <dl><dt>Sintoma</dt><dd>A exposição automática fazia a média dos últimos 64 quadros errado (0,78 em vez de 2,06), deixando cenas médias claras demais.</dd>
+    <dt>Causa</dt><dd>Grupos de 128/256 threads sincronizam as waves com <code>s_barrier</code>, mas os passos finais da redução (<code>tid &lt; 32</code>, <code>&lt; 16</code>…) rodam dentro de uma wave e contam com execução em lockstep. Subgrupos de 32 da NVIDIA não garantem isso.</dd>
+    <dt>Solução</dt><dd>Barreira de subgrupo (nova op IR <code>SubgroupBarrier</code>) nos mesmos pontos em que grupos de 64 recebem barreira; uma barreira de grupo inteiro ali causava preto piscando. Mesma conclusão do <code>lds_barriers_large_groups</code> do Pink. <code>SOTC_LDS_BARRIERS=0/1</code>.</dd></dl>
+    <div class="commits">7d795cff · shared_memory_barrier_pass.cpp, emit_spirv_barriers.cpp</div>
+  </div></div>
+</div>
+
+<h2>Desempenho <small>14–15 → 17–18 FPS</small></h2>
+<p class="lead">No modo de readback preciso (<code>readbacks_mode: 2</code>, necessário para a coerência no Windows), cada leitura da CPU em memória escrita pela GPU forçava um <code>Finish()</code>. A medição mostrou que o gargalo real era a gravação de comandos serializada com a execução na GPU.</p>
+<div class="fixes">
+  <div class="fix"><div class="id">19</div><div>
+    <h3>Envio periódico de comandos</h3>
+    <div class="tags"><span class="tag pink">ideia do Pink</span><span class="tag sotc">padrão só no SotC</span></div>
+    <dl><dt>Solução</dt><dd>Submete a cada 256 draws/dispatches sem esperar (até 4× isso dentro de um render pass), e a GPU executa enquanto a CPU grava. Foi o maior ganho: de 15,3 para 18,6 FPS, com a espera por quadro caindo de 28 para 8–13 ms. <code>SOTC_FLUSH_EVERY</code>.</dd></dl>
+    <div class="commits">16226114 · vk_rasterizer.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">20</div><div>
+    <h3>Readbacks agrupados ("hot readbacks")</h3>
+    <div class="tags"><span class="tag up">candidato upstream</span></div>
+    <dl><dt>Solução</dt><dd>Já que a GPU está ociosa, cada readback leva junto as regiões lidas recentemente que a GPU modificou de novo. Isso corta as sincronizações pela metade (~+20% FPS). <code>SOTC_RB_HOT</code> (0, 1, 2; padrão 2).</dd></dl>
+    <div class="commits">517f0873 · 16226114 · buffer_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">21</div><div>
+    <h3>Leituras limpas do walker SRT</h3>
+    <div class="tags"><span class="tag pink">portado do Pink</span></div>
+    <dl><dt>Causa</dt><dd>65% dos readbacks liam bytes que a GPU não tinha escrito: só a página de 4 KB estava protegida por causa de outros bytes. Cerca de 75% vinham da thread da GPU, no walker SRT.</dd>
+    <dt>Solução</dt><dd>O tratador de falhas decodifica o <code>mov</code> do walker e completa a leitura pela memória de backing, marcando a página num bitmap; o walker testa o bitmap e chama um callback barato com cache por página (ponteiro de backing e faixa escrita pela GPU). <code>SOTC_CLEAN_READS</code>.</dd></dl>
+    <div class="commits">16226114 · page_manager.cpp, flatten_extended_userdata_pass.cpp, buffer_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">22</div><div>
+    <h3>Readback antecipado na fila gráfica</h3>
+    <div class="tags"><span class="tag pink">ideia do Pink</span></div>
+    <dl><dt>Solução</dt><dd>Quando o dado foi escrito por trabalho já enviado, a cópia vai num command buffer próprio, sem enviar e esperar o lote em gravação (~+3%). <code>SOTC_RB_AHEAD</code>.</dd></dl>
+    <div class="commits">16226114 · vk_scheduler.cpp, buffer_cache.cpp</div>
+  </div></div>
+</div>
+
+<h2>Imagem <small>patch de shader do jogo</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">23</div><div>
+    <h3>"Fantasma" do desfoque de movimento e sol estourado</h3>
+    <div class="tags"><span class="tag sotc">específico SotC</span></div>
+    <dl><dt>Causa</dt><dd>O motion blur por objeto escala com o movimento por quadro; a ~16 FPS (contra 30 no PS4) o rastro ficava duas vezes maior e aparecia como um fantasma seguindo o Wander. A névoa volumétrica deixava o céu estourado.</dd>
+    <dt>Solução</dt><dd>Patch SPIR-V do pós-processamento <code>fs_0x291dbcd0</code>: peso do blur × 0,5 e exposição × 0,8. O emulador passou a aplicar patches de shader também a pipelines vindas do cache. Inclui <code>make_patch.py</code>, que regenera o patch por padrão de instruções.</dd></dl>
+    <div class="commits">72f86ac4 · e36eb77f · ce9a64fe · sotc/shader_patch/</div>
+  </div></div>
+</div>
+
+<h2>Limitações conhecidas</h2>
+<ul class="plain">
+  <li>O jogo exige <code>readbacks_mode: 2</code> (preciso). Os modos 0 e 1 travam a GPU ou disparam asserts.</li>
+  <li>Liberação de memória de arena no unmap (<code>SOTC_ARENA_RELEASE</code>) continua opcional: ainda corre contra trabalho em andamento durante carregamentos.</li>
+  <li>Testado só em NVIDIA (RTX 2060 SUPER) no Windows 11. O desempenho em outras placas é desconhecido.</li>
+  <li>17–18 FPS no mundo aberto continua abaixo dos 30 do PS4; a thread do processador de comandos é o caminho crítico.</li>
+</ul>
+
+<h2>Variáveis de ambiente</h2>
+<div class="tablewrap"><table>
+  <thead><tr><th>Variável</th><th>Padrão</th><th>Efeito</th></tr></thead>
+  <tbody>
+    <tr><td><code>SOTC_FLUSH_EVERY</code></td><td class="num">256 no SotC</td><td>Envio periódico; 0 desliga</td></tr>
+    <tr><td><code>SOTC_RB_HOT</code></td><td class="num">2</td><td>Readbacks agrupados: 0 off, 1 conservador, 2 qualquer arena</td></tr>
+    <tr><td><code>SOTC_CLEAN_READS</code></td><td class="num">1</td><td>Leituras limpas do walker SRT</td></tr>
+    <tr><td><code>SOTC_RB_AHEAD</code></td><td class="num">1</td><td>Readback antecipado</td></tr>
+    <tr><td><code>SOTC_EARLY_Z</code></td><td class="num">1 no SotC</td><td>Testes de profundidade antecipados</td></tr>
+    <tr><td><code>SOTC_WAVE64_UNIFORM</code></td><td class="num">1 no SotC</td><td>Ramos uniformes wave64 e barreiras LDS</td></tr>
+    <tr><td><code>SOTC_ARENA_RELEASE</code></td><td class="num">desligado</td><td>Libera memória de arena no unmap</td></tr>
+    <tr><td><code>SHADPS4_LOOP_LIMIT</code></td><td class="num">8192 no SotC</td><td>Iterações máximas de loop por invocação</td></tr>
+    <tr><td><code>SHADPS4_REDZONE_PROTECT</code></td><td class="num">—</td><td>Lista extra de funções para proteção de red zone</td></tr>
+    <tr><td><code>SOTC_FRAME_LOG</code></td><td class="num">desligado</td><td>Escreve contagem de quadros e tempo no stderr a cada N quadros</td></tr>
+    <tr><td><code>SHADPS4_IEEE_MINMAX</code></td><td class="num">desligado</td><td>Volta ao min/max/clamp antigo (FMin/FMax)</td></tr>
+    <tr><td><code>SHADPS4_ABSOLUTE_INSTANCE_ID</code></td><td class="num">desligado</td><td>Volta ao instance ID absoluto antigo</td></tr>
+    <tr><td><code>SOTC_LDS_BARRIERS</code></td><td class="num">1 no SotC</td><td>Barreiras de subgrupo em grupos com várias waves</td></tr>
+    <tr><td><code>SOTC_PROBE</code></td><td class="num">desligado</td><td>Diagnóstico: registra floats de endereços do guest a cada <code>SOTC_PROBE_MS</code> em <code>user/log/sotc_probe.txt</code></td></tr>
+    <tr><td><code>SOTC_DUMP</code></td><td class="num">desligado</td><td>Diagnóstico: F12 (sem RenderDoc) despeja as imagens das passadas da névoa em <code>user/log/dump_N</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2>Créditos</h2>
+<p>Partes portadas, com atribuição no código, do <a href="https://github.com/luizgustavs/Pink-shadPS4" target="_blank" rel="noopener">Pink-shadPS4</a> de luizgustavs: identidades de redução wave64, ramos uniformes e barreiras LDS, testes de profundidade antecipados, leituras limpas do walker, readback antecipado e envio periódico. Código-fonte completo das mudanças: <code>source/sotc-windows-fixes.patch</code> no pacote de teste, aplicável sobre o commit <code>259e815a</code> do <a href="https://github.com/shadps4-emu/shadPS4" target="_blank" rel="noopener">shadPS4</a> (GPL-2.0).</p>
+</article>
+
+<!-- ============================ ENGLISH ============================ -->
+<article id="en" lang="en" hidden>
+<dl class="meta">
+  <div><dt>Game</dt><dd>Shadow of the Colossus, CUSA08809 (EU) v1.01</dd></div>
+  <div><dt>Base</dt><dd>shadPS4 <code>259e815a</code> (main, Sep 2026)</dd></div>
+  <div><dt>Branch</dt><dd><code>sotc-windows-fixes</code> @ <code>1547360c</code>, 53 commits</dd></div>
+  <div><dt>Test machine</dt><dd>Windows 11, i9-13900K (no SSE4a), RTX 2060 SUPER 8 GB</dd></div>
+</dl>
+
+<h2>Summary</h2>
+<p class="lead">At the start, the game hung the GPU in the intro (TDR), died silently when skipping the intro video or loading the save, showed the menu without text and ran at 13–15 fps in the open world. It now runs from boot to gameplay with no crashes in the automated test runs.</p>
+<div class="tablewrap"><table>
+  <thead><tr><th>Metric</th><th>Before</th><th>After</th></tr></thead>
+  <tbody>
+    <tr><td>Crashes when skipping the intro / loading the save</td><td class="num">2–6 in 10 runs</td><td class="num good">0 in 20, then 10/10 clean</td></tr>
+    <tr><td>GPU hang (TDR) in the intro</td><td class="num">every run</td><td class="num good">none</td></tr>
+    <tr><td>Open-world fps</td><td class="num">13–15</td><td class="num good">17–18</td></tr>
+    <tr><td>CPU wait for the GPU, per frame</td><td class="num">~28 ms</td><td class="num good">8–13 ms</td></tr>
+    <tr><td>Readback syncs per 100 frames</td><td class="num">~7,600</td><td class="num good">~1,000</td></tr>
+    <tr><td>Captures with black blocks (DOF)</td><td class="num">21 of 48</td><td class="num good">0 of 32</td></tr>
+    <tr><td>Fog volume with NaN (light shafts)</td><td class="num">66%</td><td class="num good">fixed</td></tr>
+    <tr><td>Average scene luminance at the bird boss lake</td><td class="num">37–109</td><td class="num good">&lt; 0.8</td></tr>
+  </tbody>
+</table></div>
+
+<h2>How to read this</h2>
+<div class="tags"><span class="tag up">upstream candidate</span><span class="tag sotc">SotC-specific / workaround</span><span class="tag pink">ported from Pink-shadPS4</span></div>
+<p class="lead">"Upstream candidate" marks generic fixes that should help other games on Windows. Game-specific ones are gated to serial <code>CUSA08809</code> and have a <code>SOTC_*</code> environment switch.</p>
+
+<h2>Core and Windows <small>CPU, exceptions, stacks</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">01</div><div>
+    <h3>Short SSE4a instructions destroyed the game's red zone</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>NaN poses, broken collision and a crash around 35 s (<code>eboot+0xF42CE0</code>), only on Intel CPUs under Windows.</dd>
+    <dt>Cause</dt><dd>Without SSE4a, EXTRQ/INSERTQ are emulated. The 4-byte forms do not fit a jmp and went to the trap handler. On Windows, exception delivery writes below RSP and wipes the 128-byte red zone that the game reads right after. Linux skips the red zone and AMD CPUs run SSE4a natively.</dd>
+    <dt>Fix</dt><dd><code>PatchShortSse4aInstructions</code> relocates the short forms into a trampoline (36 sites in the eboot).</dd></dl>
+    <div class="commits">87695648 · cpu_patches.cpp, module.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">02</div><div>
+    <h3>The fault handler runs on an alternate stack</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>The process died with no log, dump or handler, in about 1 of 3 long sessions.</dd>
+    <dt>Cause</dt><dd>SotC runs jobs on hundreds of contiguous 16 KB fiber stacks with no guard pages. On Windows the fault handler (page tracking and readback) runs on the faulting stack and overflowed into the neighbouring one.</dd>
+    <dt>Fix</dt><dd>A 512 KB alternate stack per thread (<code>shad_call_on_stack</code>), swapping the TEB <code>StackBase/StackLimit</code> during the call.</dd></dl>
+    <div class="commits">d5c6d6d4 · signals.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">03</div><div>
+    <h3>Thread and fiber stacks are never protected</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd>GPU-tracked ranges covered guest stacks. A fault whose exception frame cannot be written below RSP kills the process before any handler runs. While loading the save, an AV in <code>sceFiberLongJmp</code> wrote to a protected destination stack.</dd>
+    <dt>Fix</dt><dd>A reference-counted stack registry (interval_map, 16 KB margin) that the page manager never protects, and <code>EnsureStackWritable</code> before every fiber long jump or entry. Save-load crashes went from 2–6/10 to 0/20.</dd></dl>
+    <div class="commits">06bead25 · 328c29e5 · page_manager.cpp, pthread.cpp, stack.cpp, fiber.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">04</div><div>
+    <h3>SplitRegion wiped page protections</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>The GPU used stale data (endless compute loops, TDR) and readbacks overwrote the heap (crash in the game's allocator).</dd>
+    <dt>Cause</dt><dd><code>AddressSpace::SplitRegion</code> unmaps and remaps neighbouring views with their original (RW) protection. That silently dropped the tracking of hundreds of MB, so CPU writes went undetected.</dd>
+    <dt>Fix</dt><dd>A remap callback that runs <code>PageManager::ReapplyProtection</code> on the recreated pages.</dd></dl>
+    <div class="commits">9df0b674 · d97450cc · address_space.cpp, page_manager.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">05</div><div>
+    <h3>Selective red-zone protection</h3>
+    <div class="tags"><span class="tag sotc">SotC-specific</span></div>
+    <dl><dt>Cause</dt><dd>Two game functions (<code>eboot+0xEDFB30</code> and <code>+0xF67D2B</code>) keep pointers below RSP inside loops that touch tracked memory; exceptions from the precise readback mode wiped them. The global static red-zone patch is unstable (2 of 8 runs).</dd>
+    <dt>Fix</dt><dd>The static patch is applied only to listed functions, per serial; <code>SHADPS4_REDZONE_PROTECT</code> lists more.</dd></dl>
+    <div class="commits">1d3fdfeb · f4d7f868 · module.cpp</div>
+  </div></div>
+</div>
+
+<h2>Vulkan and synchronization <small>crashes and GPU hangs</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">06</div><div>
+    <h3>A stage mask for every wait semaphore</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd><code>SubmitInfo</code> takes up to 4 waits but only 2 stage masks existed; the 3rd and 4th were read past the array, causing stalls or deadlocks.</dd>
+    <dt>Fix</dt><dd>A 4-entry mask array with a <code>static_assert</code> tied to <code>wait_semas</code>.</dd></dl>
+    <div class="commits">671eae23 · vk_scheduler.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">07</div><div>
+    <h3>Device loss no longer freezes the emulator</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd><code>Semaphore::Wait</code> retried <code>waitSemaphores</code> forever after a device loss.</dd>
+    <dt>Fix</dt><dd>Detect <code>eErrorDeviceLost</code>, log the details through <code>VK_EXT_device_fault</code> and stop.</dd></dl>
+    <div class="commits">824fd094 · 286ebb69 · vk_semaphore.cpp, vk_instance.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">08</div><div>
+    <h3>Depth copies between different formats go through a buffer</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>Device lost (WriteInvalid) when skipping the intro video.</dd>
+    <dt>Cause</dt><dd><code>Runtime::CopyColorAndDepth</code> issued a <code>vkCmdCopyImage</code> from D32 to D32S8, an invalid copy (found with synchronization validation).</dd>
+    <dt>Fix</dt><dd>Depth→depth copies with different formats use <code>CopyImageWithBuffer</code>.</dd></dl>
+    <div class="commits">762fe685 · vk_runtime.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">09</div><div>
+    <h3>Stages leaked between pipelines restored from the cache</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>A crash around frame 90–150: a draw with a shader that had no user data.</dd>
+    <dt>Fix</dt><dd>Cache loading clears stages per pipeline; corrupted entries are skipped instead of aborting; draws with null user data are skipped.</dd></dl>
+    <div class="commits">051b6076 · c39ae599 · vk_pipeline_cache.cpp, vk_rasterizer.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">10</div><div>
+    <h3>Coherence of fixed-function reads and fences</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd>Indirect arguments and vertex/index buffers were not recorded as reads, so a following <code>WRITE_DATA</code> did not wait for the draw. EOP/EOS fences written straight to memory did not invalidate the copy already uploaded to the GPU.</dd>
+    <dt>Fix</dt><dd>Fixed-function reads join the barrier tracking; <code>Liverpool::WriteFenceValue</code> invalidates before writing.</dd></dl>
+    <div class="commits">c1ba2740 · d2a414ff · vk_rasterizer.cpp, liverpool.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">11</div><div>
+    <h3>Running out of video memory does not abort</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd>Buffer cache arenas are never released and compete with textures; on 8 GB cards allocations failed and the emulator aborted.</dd>
+    <dt>Fix</dt><dd>Images and buffers retry past the budget; arenas fall back to system RAM; emergency texture collection; aggressive GC from 60% of the budget. Huge or garbage-sized read-only bindings are limited to 64 MB, and unmapped addresses get a null binding.</dd></dl>
+    <div class="commits">13727b94 · d5c6d6d4 · c0c37d96 · ae2bb90f · buffer_cache.cpp, texture_cache.cpp, image.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">12</div><div>
+    <h3>Deadlock between the fault handler and the texture cache</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd><code>MarkAsMaybeDirty</code> hashed guest memory under the cache mutex: reading a protected page faulted again and waited for the GPU thread, which waited for the mutex.</dd>
+    <dt>Fix</dt><dd>No hashing on that path; <code>RefreshImage</code> already rehashes on the GPU thread.</dd></dl>
+    <div class="commits">d5c6d6d4 · texture_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">13</div><div>
+    <h3>The SRT walker buffer overflowed with a large cache</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>The emulator died at boot, but only with the pipeline cache of a long-played game.</dd>
+    <dt>Cause</dt><dd>Every cached walker is loaded at startup; with the larger walkers of item 21 they passed 32 MB and Xbyak threw an unhandled exception.</dd>
+    <dt>Fix</dt><dd>A 256 MB buffer (untouched pages cost nothing); a walker that does not fit drops its cached program (recompiled) instead of throwing.</dd></dl>
+    <div class="commits">c728e483 · flatten_extended_userdata_pass.cpp, vk_pipeline_serialization.cpp</div>
+  </div></div>
+</div>
+
+<h2>Shader recompiler</h2>
+<div class="fixes">
+  <div class="fix"><div class="id">14</div><div>
+    <h3>Wave64 ReadLane on 32-wide subgroup GPUs</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span><span class="tag pink">identities from Pink</span></div>
+    <dl><dt>Cause</dt><dd>GCN code reads lanes 32–63 (the <code>readlane 32</code> that merges the halves of a reduction). On NVIDIA that index falls outside the subgroup, which is undefined; folding it onto the lower half counts lanes twice.</dd>
+    <dt>Fix</dt><dd>Constant indices stay inside the host subgroup; in workgroups of ≤ 32 threads the missing lane of a reduction becomes the operation's identity (0 for a sum, +∞ for a min, and so on).</dd></dl>
+    <div class="commits">6f06164f · 16226114 · lower_wave64_pass.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">15</div><div>
+    <h3>Wave64 uniform branches and LDS barriers</h3>
+    <div class="tags"><span class="tag pink">ported from Pink</span><span class="tag sotc">SotC only</span></div>
+    <dl><dt>Fix</dt><dd>ReadLane/Ballot inside workgroup-uniform branches are lowered too, and the LDS barrier pass no longer treats a condition that depends only on a uniform ReadLane as divergent (lighting stripes). <code>SOTC_WAVE64_UNIFORM</code>.</dd></dl>
+    <div class="commits">16226114 · lower_wave64_pass.cpp, shared_memory_barrier_pass.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">16</div><div>
+    <h3>Depth tests before the pixel shader (rectangles on the ground)</h3>
+    <div class="tags"><span class="tag pink">ported from Pink</span><span class="tag sotc">SotC only</span></div>
+    <dl><dt>Symptom</dt><dd>Dark rectangles on the ground and structures showing through the scenery.</dd>
+    <dt>Cause</dt><dd>GCN runs depth/stencil before the pixel shader when <code>DB_SHADER_CONTROL.Z_ORDER</code> asks for it. In Vulkan a shader with storage writes needs <code>EarlyFragmentTests</code> for that; without it, the deferred decals painted their whole box into the G-buffer.</dd>
+    <dt>Fix</dt><dd><code>EarlyFragmentTests</code> when Z_ORDER is early, the shader writes storage and has no discard or depth/stencil/mask export (53 shaders in SotC). <code>SOTC_EARLY_Z</code>.</dd></dl>
+    <div class="commits">16226114 · emit_spirv.cpp, vk_pipeline_cache.cpp, runtime_info.h</div>
+  </div></div>
+  <div class="fix"><div class="id">17</div><div>
+    <h3>Runtime-indexed ReadConst (black blocks)</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Cause</dt><dd>The foreground DOF (<code>0x5edac7be</code>) reads offsets with a runtime index; without direct memory access every dynamic read returned <code>flatbuf[0]</code>, so null samples became black blocks.</dd>
+    <dt>Fix</dt><dd>The SRT walker copies a 512-dword window of the table and the shader indexes into it.</dd></dl>
+    <div class="commits">609b4dd2 · flatten_extended_userdata_pass.cpp, emit_spirv_context_get_set.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">18</div><div>
+    <h3>Other recompiler fixes</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <ul class="plain">
+      <li>Legacy multiply semantics in <code>V_MAC/V_MAD_LEGACY_F32</code> (0 × ∞ = 0). <span class="mono">ba215a90</span></li>
+      <li>Thread-id buffer addressing in graphics stages (assert around frame 2400). <span class="mono">0ce1718a</span></li>
+      <li>Garbage formats and swizzles in descriptors no longer abort. <span class="mono">8340afd6</span></li>
+      <li>A per-invocation loop iteration budget against endless loops that cause TDRs (8192 in SotC, <code>SHADPS4_LOOP_LIMIT</code>). <span class="mono">bfa42a59</span></li>
+      <li>SRT walkers restored from the cache are covered by the fault handler too. <span class="mono">aa0dbba9</span></li>
+    </ul>
+  </div></div>
+  <div class="fix"><div class="id">24</div><div>
+    <h3>Negated compares with NaN (light shafts wiped out)</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>Inside the temple the fog became a flat, washed-out grey veil and the light shafts disappeared.</dd>
+    <dt>Cause</dt><dd><code>V_CMP(X)_N{GE,GT,LE,EQ,LT,LG}_F32/F64</code> negate the comparison and are <em>true</em> when an operand is NaN. The recompiler translated them to the ordered opposite (<code>NGE</code> → <code>LT</code>), which is <em>false</em> for NaN. SotC writes NaN on purpose (<code>0xFFFFFFFF</code>) as an "occluded" marker into the froxels behind geometry and tests it this way when blending its temporal fog history. The marker leaked into the history (66% of the volume) and never recovered.</dd>
+    <dt>Fix</dt><dd>Negated compares use the unordered IR variants (<code>FPUnord*</code>). Also: <code>V_MIN/V_MAX/V_MED3</code> and the clamp modifier emit <code>NMin/NMax</code> (GCN returns the other operand for NaN; <code>SHADPS4_IEEE_MINMAX=1</code> restores the old behavior). Found with RenderDoc: a capture on the spot, a dump of the 160×90×64 volume and thread debugging up to the first instruction producing NaN.</dd></dl>
+    <div class="commits">d471a277 · vector_alu.cpp, translate.h, emit_spirv_floating_point.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">25</div><div>
+    <h3>Instance ID relative to the draw start (white flashes at the bird boss lake)</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Symptom</dt><dd>At the bird colossus lake, cross-shaped white flashes (the bird's silhouette) and flickering white dots on the horizon whenever the boss flew. Pink-shadPS4 shows the same bug.</dd>
+    <dt>Cause</dt><dd>On GCN the instance ID VGPRs count from 0 in every draw; the start instance only reaches the shader through a user SGPR or memory the shader reads itself. The recompiler used <code>gl_InstanceIndex</code>, which already includes <code>firstInstance</code>. SotC's sun-shaft particles (vs <code>0x80de1361</code>, <code>DrawIndirect</code> with <code>firstInstance</code> 3409) add the start read from memory, so they read particle 3409 + 3409 + n: stale data that became screen-sized triangles in the sun-visibility texture (8 layers of 160×90). The volumetric fog accumulated it up to 1,800.</dd>
+    <dt>Fix</dt><dd>The instance ID is now relative (<code>gl_InstanceIndex − gl_BaseInstance</code>) unless the fetch shader adds the start SGPR itself. <code>SHADPS4_ABSOLUTE_INSTANCE_ID=1</code> restores the old behavior. Measured average scene luminance at the lake: 37–109 → below 0.8. Found by dumping the real images of the fog passes while playing (<code>SOTC_DUMP</code>) and comparing a normal frame with a white one stage by stage.</dd></dl>
+    <div class="commits">7d795cff · translate.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">26</div><div>
+    <h3>Subgroup barriers in LDS reductions of multi-wave workgroups</h3>
+    <div class="tags"><span class="tag sotc">SotC-specific / workaround</span></div>
+    <dl><dt>Symptom</dt><dd>The auto-exposure averaged its last 64 frames wrongly (0.78 instead of 2.06), leaving mid-brightness scenes too bright.</dd>
+    <dt>Cause</dt><dd>128/256-thread groups synchronize their waves with <code>s_barrier</code>, but the last reduction steps (<code>tid &lt; 32</code>, <code>&lt; 16</code>…) run inside one wave and rely on lockstep execution. NVIDIA's 32-lane subgroups do not guarantee it.</dd>
+    <dt>Fix</dt><dd>A subgroup barrier (new <code>SubgroupBarrier</code> IR op) at the points where 64-thread groups get a barrier; a workgroup barrier there caused black flicker. Same conclusion as Pink's <code>lds_barriers_large_groups</code>. <code>SOTC_LDS_BARRIERS=0/1</code>.</dd></dl>
+    <div class="commits">7d795cff · shared_memory_barrier_pass.cpp, emit_spirv_barriers.cpp</div>
+  </div></div>
+</div>
+
+<h2>Performance <small>14–15 → 17–18 fps</small></h2>
+<p class="lead">In the precise readback mode (<code>readbacks_mode: 2</code>, needed for coherence on Windows), every CPU read of GPU-written memory forced a <code>Finish()</code>. Measurements showed the real bottleneck was command recording serialized with GPU execution.</p>
+<div class="fixes">
+  <div class="fix"><div class="id">19</div><div>
+    <h3>Periodic command submission</h3>
+    <div class="tags"><span class="tag pink">idea from Pink</span><span class="tag sotc">default in SotC only</span></div>
+    <dl><dt>Fix</dt><dd>Submit every 256 draws/dispatches without waiting (up to 4× that inside a render pass), so the GPU runs while the CPU records. The biggest win: 15.3 → 18.6 fps, with the per-frame wait falling from 28 to 8–13 ms. <code>SOTC_FLUSH_EVERY</code>.</dd></dl>
+    <div class="commits">16226114 · vk_rasterizer.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">20</div><div>
+    <h3>Batched ("hot") readbacks</h3>
+    <div class="tags"><span class="tag up">upstream candidate</span></div>
+    <dl><dt>Fix</dt><dd>Since the GPU is idle anyway, each readback also brings along recently read regions the GPU has modified again. This halves the syncs (~+20% fps). <code>SOTC_RB_HOT</code> (0, 1, 2; default 2).</dd></dl>
+    <div class="commits">517f0873 · 16226114 · buffer_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">21</div><div>
+    <h3>SRT walker clean reads</h3>
+    <div class="tags"><span class="tag pink">ported from Pink</span></div>
+    <dl><dt>Cause</dt><dd>65% of readbacks read bytes the GPU had not written: only the 4 KB page was protected because of other bytes. About 75% came from the GPU thread, in the SRT walker.</dd>
+    <dt>Fix</dt><dd>The fault handler decodes the walker's <code>mov</code> and completes the load from backing memory, marking the page in a bitmap; the walker tests the bitmap and calls a cheap callback backed by a per-page cache (backing pointer and GPU-written range). <code>SOTC_CLEAN_READS</code>.</dd></dl>
+    <div class="commits">16226114 · page_manager.cpp, flatten_extended_userdata_pass.cpp, buffer_cache.cpp</div>
+  </div></div>
+  <div class="fix"><div class="id">22</div><div>
+    <h3>Readback ahead on the graphics queue</h3>
+    <div class="tags"><span class="tag pink">idea from Pink</span></div>
+    <dl><dt>Fix</dt><dd>When the data was written by already-submitted work, the copy goes in its own command buffer, without submitting and waiting for the batch being recorded (~+3%). <code>SOTC_RB_AHEAD</code>.</dd></dl>
+    <div class="commits">16226114 · vk_scheduler.cpp, buffer_cache.cpp</div>
+  </div></div>
+</div>
+
+<h2>Image <small>game shader patch</small></h2>
+<div class="fixes">
+  <div class="fix"><div class="id">23</div><div>
+    <h3>Motion blur "ghost" and blown-out sun</h3>
+    <div class="tags"><span class="tag sotc">SotC-specific</span></div>
+    <dl><dt>Cause</dt><dd>The per-object motion blur scales with per-frame motion; at ~16 fps (vs 30 on PS4) the trail was twice as long and showed as a ghost following Wander. The volumetric fog left the sky blown out.</dd>
+    <dt>Fix</dt><dd>A SPIR-V patch of the post-process shader <code>fs_0x291dbcd0</code>: blur weight × 0.5 and exposure × 0.8. The emulator now applies shader patches to pipelines restored from the cache too. Includes <code>make_patch.py</code>, which regenerates the patch by instruction pattern.</dd></dl>
+    <div class="commits">72f86ac4 · e36eb77f · ce9a64fe · sotc/shader_patch/</div>
+  </div></div>
+</div>
+
+<h2>Known limitations</h2>
+<ul class="plain">
+  <li>The game requires <code>readbacks_mode: 2</code> (precise). Modes 0 and 1 hang the GPU or hit asserts.</li>
+  <li>Releasing arena memory on unmap (<code>SOTC_ARENA_RELEASE</code>) stays opt-in: it still races with in-flight work during loads.</li>
+  <li>Tested only on NVIDIA (RTX 2060 SUPER) under Windows 11. Performance on other GPUs is unknown.</li>
+  <li>17–18 fps in the open world is still below the PS4's 30; the command processor thread is the critical path.</li>
+</ul>
+
+<h2>Environment switches</h2>
+<div class="tablewrap"><table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>SOTC_FLUSH_EVERY</code></td><td class="num">256 in SotC</td><td>Periodic submission; 0 turns it off</td></tr>
+    <tr><td><code>SOTC_RB_HOT</code></td><td class="num">2</td><td>Batched readbacks: 0 off, 1 conservative, 2 any arena</td></tr>
+    <tr><td><code>SOTC_CLEAN_READS</code></td><td class="num">1</td><td>SRT walker clean reads</td></tr>
+    <tr><td><code>SOTC_RB_AHEAD</code></td><td class="num">1</td><td>Readback ahead</td></tr>
+    <tr><td><code>SOTC_EARLY_Z</code></td><td class="num">1 in SotC</td><td>Early depth tests</td></tr>
+    <tr><td><code>SOTC_WAVE64_UNIFORM</code></td><td class="num">1 in SotC</td><td>Wave64 uniform branches and LDS barriers</td></tr>
+    <tr><td><code>SOTC_ARENA_RELEASE</code></td><td class="num">off</td><td>Release arena memory on unmap</td></tr>
+    <tr><td><code>SHADPS4_LOOP_LIMIT</code></td><td class="num">8192 in SotC</td><td>Maximum loop iterations per invocation</td></tr>
+    <tr><td><code>SHADPS4_REDZONE_PROTECT</code></td><td class="num">—</td><td>Extra functions for red-zone protection</td></tr>
+    <tr><td><code>SOTC_FRAME_LOG</code></td><td class="num">off</td><td>Prints frame count and time to stderr every N frames</td></tr>
+    <tr><td><code>SHADPS4_IEEE_MINMAX</code></td><td class="num">off</td><td>Restores the old min/max/clamp (FMin/FMax)</td></tr>
+    <tr><td><code>SHADPS4_ABSOLUTE_INSTANCE_ID</code></td><td class="num">off</td><td>Restores the old absolute instance ID</td></tr>
+    <tr><td><code>SOTC_LDS_BARRIERS</code></td><td class="num">1 for SotC</td><td>Subgroup barriers in multi-wave workgroups</td></tr>
+    <tr><td><code>SOTC_PROBE</code></td><td class="num">off</td><td>Diagnostic: logs floats at guest addresses every <code>SOTC_PROBE_MS</code> to <code>user/log/sotc_probe.txt</code></td></tr>
+    <tr><td><code>SOTC_DUMP</code></td><td class="num">off</td><td>Diagnostic: F12 (without RenderDoc) dumps the images of the fog passes to <code>user/log/dump_N</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2>Credits</h2>
+<p>Parts ported, with attribution in the code, from luizgustavs' <a href="https://github.com/luizgustavs/Pink-shadPS4" target="_blank" rel="noopener">Pink-shadPS4</a>: wave64 reduction identities, uniform branches and LDS barriers, early depth tests, walker clean reads, readback ahead and periodic submission. Full source of the changes: <code>source/sotc-windows-fixes.patch</code> in the test package, applying on top of <a href="https://github.com/shadps4-emu/shadPS4" target="_blank" rel="noopener">shadPS4</a> commit <code>259e815a</code> (GPL-2.0).</p>
+</article>
+
+<footer>
+  <span id="foot-pt">Relatório atualizado em 03/10/2026. Pacote de teste: <code>SotC-shadPS4-fixes-2026-10-03.zip</code>.</span>
+  <span id="foot-en" hidden>Report updated on 2026-10-03. Test package: <code>SotC-shadPS4-fixes-2026-10-03.zip</code>.</span>
+</footer>
+</div>
+
+<script>
+(function () {
+  var langs = { pt: document.getElementById('pt'), en: document.getElementById('en') };
+  var foot = { pt: document.getElementById('foot-pt'), en: document.getElementById('foot-en') };
+  var buttons = document.querySelectorAll('.lang button');
+  function show(lang) {
+    if (!langs[lang]) lang = 'pt';
+    Object.keys(langs).forEach(function (k) { langs[k].hidden = k !== lang; foot[k].hidden = k !== lang; });
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.lang === lang)); });
+    document.documentElement.lang = lang === 'en' ? 'en' : 'pt-BR';
+    try { localStorage.setItem('sotc-report-lang', lang); } catch (e) {}
+  }
+  buttons.forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.lang); }); });
+  var initial = location.hash === '#en' ? 'en' : location.hash === '#pt' ? 'pt' : null;
+  if (!initial) { try { initial = localStorage.getItem('sotc-report-lang'); } catch (e) {} }
+  show(initial || 'pt');
+})();
+</script>
+
+</body></html>
