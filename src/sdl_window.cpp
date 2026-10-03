@@ -329,6 +329,9 @@ void WindowSDL::WaitEvent() {
             VideoCore::TriggerCapture();
         } else {
             VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
+            if (std::getenv("SOTC_DUMP")) {
+                VideoCore::ArmImageDump();
+            }
         }
         break;
     case SDL_EVENT_SCREENSHOT_WITH_OVERLAYS:

@@ -162,4 +162,21 @@ ScreenshotRequests ConsumeScreenshotRequests() {
     };
 }
 
+
+static std::atomic<u32> image_dump_requests{0};
+
+void ArmImageDump() {
+    image_dump_requests.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool ConsumeImageDumpRequest() {
+    u32 pending = image_dump_requests.load(std::memory_order_relaxed);
+    while (pending != 0) {
+        if (image_dump_requests.compare_exchange_weak(pending, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace VideoCore

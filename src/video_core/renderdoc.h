@@ -27,6 +27,12 @@ void SetOutputDir(const std::filesystem::path& path, const std::string& prefix);
 /// Returns true when RenderDoc API was loaded and is usable.
 bool IsRenderDocLoaded();
 
+/// SOTC_DUMP diagnostic: arms a dump of the images bound to selected compute shaders.
+void ArmImageDump();
+
+/// Returns true once per ArmImageDump call.
+bool ConsumeImageDumpRequest();
+
 enum class ScreenshotRequest : u32 {
     None = 0,
     GameOnly = 1,

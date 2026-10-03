@@ -135,6 +135,7 @@ private:
     void BindIndexBuffer(u32 index_offset = 0);
 
     void ResetBindings(bool is_compute);
+    void MaybeDumpImages(u64 pgm_hash);
     void FlushPeriodic();
     u64 commands_tick{};
     u64 commands_since_submit{};

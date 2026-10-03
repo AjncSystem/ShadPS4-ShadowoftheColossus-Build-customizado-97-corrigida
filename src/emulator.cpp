@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <set>
 #include <sstream>
+#include <thread>
+#include <cstring>
 #include <fmt/core.h>
 #include <fmt/xchar.h>
 #include <hwinfo/hwinfo.h>
@@ -62,6 +65,9 @@ Frontend::WindowSDL* g_window = nullptr;
 namespace Libraries::Kernel {
 extern char const* g_environment[64];
 }
+
+// Occlusion dumps seen by the command processor (liverpool.cpp), for SOTC_PROBE.
+extern std::atomic<u64> g_sotc_zpass_dumps;
 
 namespace Core {
 
@@ -274,6 +280,65 @@ std::map<s32, std::string> ExtractTrophies(std::string_view npbind_guest,
     }
 
     return trophy_index_map;
+}
+
+// SOTC_PROBE="0xADDR:N,..." logs N floats of guest memory at each address every SOTC_PROBE_MS
+// (default 1000) to user/log/sotc_probe.txt. A diagnostic for values the game computes on the GPU
+// (auto-exposure, luminance history): reading them faults like a guest read and is read back.
+static void StartSotcProbe() {
+    const char* spec = std::getenv("SOTC_PROBE");
+    if (!spec || !*spec) {
+        return;
+    }
+    std::vector<std::pair<uintptr_t, size_t>> ranges;
+    std::stringstream ss{spec};
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        const auto colon = item.find(':');
+        if (colon == std::string::npos) {
+            continue;
+        }
+        ranges.emplace_back(std::stoull(item.substr(0, colon), nullptr, 0),
+                            std::stoull(item.substr(colon + 1), nullptr, 0));
+    }
+    const char* ms_env = std::getenv("SOTC_PROBE_MS");
+    const int period_ms = ms_env ? std::atoi(ms_env) : 1000;
+    const auto path = Common::FS::GetUserPath(Common::FS::PathType::LogDir) / "sotc_probe.txt";
+    std::thread([ranges, period_ms, path] {
+        Common::SetCurrentThreadName("shadPS4:SotcProbe");
+        std::ofstream out{path, std::ios::trunc};
+        const auto start = std::chrono::steady_clock::now();
+        std::vector<float> values;
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - start)
+                                .count();
+            out << "t=" << ms << " zpass=" << ::g_sotc_zpass_dumps.load(std::memory_order_relaxed);
+            for (const auto& [addr, count] : ranges) {
+                bool readable = false;
+#ifdef _WIN32
+                MEMORY_BASIC_INFORMATION mbi{};
+                readable = VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) &&
+                           mbi.State == MEM_COMMIT;
+#else
+                readable = true;
+#endif
+                out << " | " << fmt::format("{:#x}", addr);
+                if (!readable) {
+                    out << " ?";
+                    continue;
+                }
+                values.resize(count);
+                std::memcpy(values.data(), reinterpret_cast<const void*>(addr),
+                            count * sizeof(float));
+                for (const float v : values) {
+                    out << ' ' << fmt::format("{:.5g}", v);
+                }
+            }
+            out << std::endl;
+        }
+    }).detach();
 }
 
 void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
@@ -701,6 +766,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         });
     }
 
+    StartSotcProbe();
     linker->Execute(args);
 
     window->InitTimers();

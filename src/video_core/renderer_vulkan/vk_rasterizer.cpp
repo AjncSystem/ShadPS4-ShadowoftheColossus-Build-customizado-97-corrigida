@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include <algorithm>
+#include <filesystem>
+#include "common/path_util.h"
+#include "video_core/renderdoc.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
 #include "core/debug_state.h"
@@ -356,6 +360,7 @@ void Rasterizer::DispatchDirect() {
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
+    MaybeDumpImages(cs.pgm_hash);
 
     ResetBindings(true);
     FlushPeriodic();
@@ -392,6 +397,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     DebugState.IncDispatch();
     runtime.AccessBuffer(buffer, base, size, vk::PipelineStageFlagBits2::eDrawIndirect,
                          vk::AccessFlagBits2::eIndirectCommandRead);
+    MaybeDumpImages(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash);
 
     ResetBindings(true);
     FlushPeriodic();
@@ -613,6 +619,60 @@ void Rasterizer::FlushPeriodic() {
         return;
     }
     scheduler.Flush();
+}
+
+// SOTC_DUMP="hash,hash,..." (hex, default: the SotC volumetric fog passes): after F12 (without
+// RenderDoc), the next dispatch of each listed compute shader dumps every image it has bound to
+// user/log/dump_N/ (raw mip 0, all layers and slices). The data is what the GPU really computed,
+// unlike a RenderDoc replay of a frame that uses the sparse guest-memory buffer.
+void Rasterizer::MaybeDumpImages(u64 pgm_hash) {
+    static const std::vector<u64> targets = [] {
+        std::vector<u64> list;
+        const char* env = std::getenv("SOTC_DUMP");
+        if (!env) {
+            return list;
+        }
+        std::string spec = env;
+        if (spec.empty() || spec == "1") {
+            spec = "b33e9db6,91c6c95e,25338711,47c1dc64";
+        }
+        size_t pos = 0;
+        while (pos < spec.size()) {
+            const size_t end = std::min(spec.find(',', pos), spec.size());
+            list.push_back(std::strtoull(spec.substr(pos, end - pos).c_str(), nullptr, 16));
+            pos = end + 1;
+        }
+        return list;
+    }();
+    static std::vector<u64> pending;
+    static std::filesystem::path dir;
+    static u32 session = 0;
+    static u32 seq = 0;
+    if (targets.empty()) {
+        return;
+    }
+    if (VideoCore::ConsumeImageDumpRequest()) {
+        pending = targets;
+        dir = Common::FS::GetUserPath(Common::FS::PathType::LogDir) / fmt::format("dump_{}", ++session);
+        std::filesystem::create_directories(dir);
+        seq = 0;
+    }
+    const auto it = std::find(pending.begin(), pending.end(), pgm_hash);
+    if (it == pending.end()) {
+        return;
+    }
+    pending.erase(it);
+    std::vector<VideoCore::ImageId> seen;
+    u32 index = 0;
+    for (const auto image_id : bound_images) {
+        if (!image_id || std::find(seen.begin(), seen.end(), image_id) != seen.end()) {
+            continue;
+        }
+        seen.push_back(image_id);
+        texture_cache.DumpImage(image_id, dir / fmt::format("{:02}_cs_{:08x}_img{}", seq, pgm_hash,
+                                                             index++));
+    }
+    ++seq;
 }
 
 void Rasterizer::ResetBindings(bool is_compute) {

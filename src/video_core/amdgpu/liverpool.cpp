@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <cstdlib>
 #include <boost/preprocessor/stringize.hpp>
 
 #include "common/assert.h"
@@ -17,6 +19,9 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+
+// Counted for the SOTC_PROBE diagnostic log (emulator.cpp).
+std::atomic<u64> g_sotc_zpass_dumps{0};
 
 namespace AmdGpu {
 
@@ -655,8 +660,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 } else if (event->event_index.Value() == EventIndex::ZpassDone) {
                     if (event->event_type.Value() == EventType::PixelPipeStatDump) {
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
-                        static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
+                        // SOTC_OCCLUSION_STEP overrides the fake per-dump increment (A/B tests:
+                        // 0 = nothing passes the depth test, i.e. every query reads "occluded").
+                        static const u64 OcclusionCounterStep = [] {
+                            const char* v = std::getenv("SOTC_OCCLUSION_STEP");
+                            return v ? std::strtoull(v, nullptr, 0) : 0x2FFFFFFULL;
+                        }();
                         u64* results = event->Address<u64*>();
+                        g_sotc_zpass_dumps.fetch_add(1, std::memory_order_relaxed);
                         for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
                             *results = pixel_counter | OcclusionCounterValidMask;
                         }

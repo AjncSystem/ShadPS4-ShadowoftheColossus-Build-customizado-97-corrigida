@@ -121,6 +121,48 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     }
 }
 
+void TextureCache::DumpImage(ImageId image_id, const std::filesystem::path& path) {
+    Image& image = slot_images[image_id];
+    const bool is_depth = image.info.props.is_depth;
+    const u32 texel = is_depth ? 4 : std::max(1u, image.info.num_bits / 8);
+    const u32 width = image.info.size.width;
+    const u32 height = image.info.size.height;
+    const u32 depth = image.info.size.depth;
+    const u32 layers = image.info.resources.layers;
+    const u32 size = width * height * depth * layers * texel;
+    if (size == 0 || size > 512_MB) {
+        return;
+    }
+    const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16, true);
+    const vk::BufferImageCopy copy = {
+        .bufferOffset = download.offset,
+        .bufferRowLength = width,
+        .bufferImageHeight = height,
+        .imageSubresource =
+            {
+                .aspectMask = is_depth ? vk::ImageAspectFlagBits::eDepth
+                                       : vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = layers,
+            },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {width, height, depth},
+    };
+    runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+    const auto name = fmt::format("{}_{:#x}_{}x{}x{}x{}_{}.raw", path.string(),
+                                  image.info.guest_address, width, height, depth, layers,
+                                  vk::to_string(image.info.pixel_format));
+    scheduler.DeferPriorityOperation([this, download, size, name] {
+        download.Invalidate();
+        if (auto* f = std::fopen(name.c_str(), "wb")) {
+            std::fwrite(download.mapped, 1, size, f);
+            std::fclose(f);
+        }
+        runtime.GetStagingPool().FreeDeferred(download);
+    });
+}
+
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
     // Do not hash guest memory here: this runs from the CPU fault handler with the cache mutex
     // held, and reading a GPU-modified (read-protected) page faults again, waits for the GPU
