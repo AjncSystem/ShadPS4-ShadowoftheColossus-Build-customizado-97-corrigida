@@ -2,6 +2,11 @@
 
 **🇧🇷 Português** · [English below](#english)
 
+> [!IMPORTANT]
+> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções.
+>
+> **To play, download the zip from [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes.
+
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
 ### Baixar
