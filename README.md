@@ -1,16 +1,16 @@
-# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado
+# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.5
 
 **🇺🇸 English** · [Português abaixo](#portugues)
 
 > [!IMPORTANT]
-> **To play, download the zip from [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
+> **To play, download SotC 0.2.5 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.5.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
 >
-> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
+> **Para jogar, baixe o SotC 0.2.5 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.5.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 
 **Unofficial** build of the [shadPS4](https://github.com/shadps4-emu/shadPS4) emulator with fixes for **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) on **Windows**. It is not distributed by the shadPS4 team. **No game files are included**: you need your own dump.
 
 ### Download
-From the **[Releases](../../releases)** tab, get `SotC-shadPS4-fixes-2026-10-03.zip` (the "Source code" entries there are only the code).
+From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.5.rar` — version **SotC 0.2.5**, shown in the emulator window title (the "Source code" entries there are only the code).
 
 ### What is fixed
 - No GPU hang in the intro and no crashes when skipping the intro video or loading the save.
@@ -106,7 +106,7 @@ The package brings `user\patches\SotC-Modes` with **both modes already enabled**
 Both can be combined. Do not enable *Sharp textures* together with the shadPS4 repository's *Custom Debug Menu Config* (they write to the same place). Not possible for now: 1440p/2160p (the game only renders them in PS4 Pro mode, which still crashes at boot in shadPS4) and 21:9/19:9 (the game has no resolution or aspect ratio setting to change).
 
 ### How to use
-1. Extract the zip somewhere with free space (not "Program Files").
+1. Extract the rar somewhere with free space (not "Program Files").
 2. **Audio — without this the game is SILENT:** copy `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own** PS4 firmware into `user\sys_modules\` (Sony firmware, it cannot be distributed here). With GoldHEN: enable FTP in the GoldHEN settings, connect from the PC (e.g. FileZilla) to the PS4's IP, port `2121`, open `/system/common/lib/` and copy both files. If you already use shadPS4 with other games, copy them from your `sys_modules` folder.
 3. Open the folder's `shadPS4QtLauncher.exe`: it comes preconfigured with this emulator (no automatic updates). The first time, pick your games folder, then double-click the game. You can also drag `eboot.bin` onto `Iniciar-SotC.bat`.
 4. The first start compiles the shaders and takes longer.
@@ -124,7 +124,7 @@ This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by co
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
 ### Baixar
-Na aba **[Releases](../../releases)**, baixe `SotC-shadPS4-fixes-2026-10-03.zip` (o "Source code" listado lá é só o código).
+Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.5.rar` — versão **SotC 0.2.5**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
 
 ### O que foi corrigido
 - Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
@@ -220,7 +220,7 @@ O pacote traz `user\patches\SotC-Modes` com **os dois modos já ligados**. Para 
 Os dois podem ser combinados. Não ligue *Texturas nítidas* junto com o *Custom Debug Menu Config* do repositório shadPS4 (escrevem no mesmo lugar). Ainda não é possível: 1440p/2160p (o jogo só renderiza assim no modo PS4 Pro, que ainda fecha no início no shadPS4) e 21:9/19:9 (o jogo não tem ajuste de resolução nem de proporção).
 
 ### Como usar
-1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
+1. Extraia o rar numa pasta com espaço (não em "Arquivos de Programas").
 2. **Áudio — sem isto o jogo fica MUDO:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\` (firmware da Sony, não pode ser distribuído aqui). Com GoldHEN: ative o FTP nas configurações do GoldHEN, conecte pelo PC (ex.: FileZilla) no IP do PS4, porta `2121`, abra `/system/common/lib/` e copie os dois arquivos. Se você já usa shadPS4 com outros jogos, copie-os da sua pasta `sys_modules`.
 3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
 4. A primeira abertura compila os shaders e demora mais.
