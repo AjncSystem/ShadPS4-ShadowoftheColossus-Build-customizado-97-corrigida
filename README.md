@@ -1,115 +1,11 @@
-# ShadPS4 · Shadow of the Colossus — build customizado (97% corrigido)
+# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado
 
-**🇧🇷 Português** · [English below](#english)
+**🇺🇸 English** · [Português abaixo](#portugues)
 
 > [!IMPORTANT]
-> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
->
 > **To play, download the zip from [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
-
-Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
-
-### Baixar
-Na aba **[Releases](../../releases)**, baixe `SotC-shadPS4-fixes-2026-10-03.zip` (o "Source code" listado lá é só o código).
-
-### O que foi corrigido
-- Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
-- Menu com texto, raios de luz do templo, sem blocos pretos e sem retângulos no chão.
-- **Lago do pássaro:** sem clarões brancos em cruz nem pontos brancos piscando no horizonte quando o boss voa.
-- Exposição automática correta em placas NVIDIA; menos "fantasma" do desfoque de movimento e sol menos estourado.
-- 17–18 FPS no mundo aberto (era 13–15).
-
-Detalhes técnicos de cada correção (causa e solução): [`documents/SotC-RELATORIO-REPORT.html`](documents/SotC-RELATORIO-REPORT.html) (baixe e abra no navegador; PT e EN).
-
-### Lista completa de correções
-Cada item tem causa, solução e commits no [relatório técnico](documents/SotC-RELATORIO-REPORT.html). ✅ = candidata ao shadPS4 oficial (genérica); 🎮 = específica do SotC (ligada só para `CUSA08809`).
-
-**Núcleo e Windows**
-| # | Correção | O que resolvia |
-|---|---|---|
-| 01 | ✅ Instruções SSE4a curtas realocadas | crash ~35 s em CPUs Intel (red zone apagada) |
-| 02 | ✅ Tratador de falhas numa pilha alternativa | jogo fechava sozinho, sem log |
-| 03 | ✅ Pilhas de thread/fibra nunca protegidas | quedas ao carregar o save |
-| 04 | ✅ Proteções de página refeitas após SplitRegion | GPU com dados velhos, travamento (TDR) |
-| 05 | 🎮 Proteção seletiva de red zone | crashes em 2 funções do jogo |
-
-**Vulkan e sincronização**
-| # | Correção | O que resolvia |
-|---|---|---|
-| 06 | ✅ Máscara de estágio para cada semáforo de espera | travamentos/deadlock |
-| 07 | ✅ Device lost não congela o emulador | emulador preso para sempre |
-| 08 | ✅ Cópia de profundidade entre formatos via buffer | queda ao pular o vídeo de abertura |
-| 09 | ✅ Estágios não vazam entre pipelines do cache | crash nos primeiros quadros |
-| 10 | ✅ Coerência de leituras indiretas/vértice e fences | GPU usando dados velhos |
-| 11 | ✅ Memória de vídeo esgotada não aborta | queda em placas de 8 GB |
-| 12 | ✅ Sem deadlock entre tratador de falhas e texturas | congelamento |
-| 13 | ✅ Buffer de walkers SRT maior | crash no boot com cache grande |
-
-**Recompilador de shaders**
-| # | Correção | O que resolvia |
-|---|---|---|
-| 14 | ✅ ReadLane wave64 em GPUs de subgrupo 32 | reduções erradas na NVIDIA |
-| 15 | 🎮 Ramos uniformes wave64 e barreiras LDS | faixas na iluminação |
-| 16 | 🎮 Testes de profundidade antes do pixel shader | retângulos escuros no chão |
-| 17 | ✅ ReadConst com índice dinâmico | blocos pretos (desfoque) |
-| 18 | ✅ Outras (V_MAD_LEGACY, descritores lixo, limite de loops…) | asserts e travamentos |
-| 24 | ✅ Comparações negadas com NaN | raios de luz do templo apagados |
-| 25 | ✅ Instance ID relativo ao início do desenho | clarões no lago do pássaro |
-| 26 | 🎮 Barreiras de subgrupo em reduções LDS | exposição automática errada |
-
-**Desempenho** (13–15 → 17–18 FPS)
-| # | Correção |
-|---|---|
-| 19 | 🎮 Envio periódico de comandos (o maior ganho) |
-| 20 | ✅ Readbacks agrupados |
-| 21 | ✅ Leituras limpas do walker SRT |
-| 22 | ✅ Readback antecipado |
-
-**Imagem**
-| # | Correção |
-|---|---|
-| 23 | 🎮 Patch de shader: menos "fantasma" do motion blur e sol 20% menos estourado |
-
-### Ferramentas e opções
-Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `.bat` com `set NOME=valor`). Os padrões já são os recomendados; mude só para testar.
-
-| Variável | Padrão | Para que serve |
-|---|---|---|
-| `SOTC_FLUSH_EVERY` | 256 no SotC | envio periódico de comandos; `0` desliga |
-| `SOTC_RB_HOT` | 2 | readbacks agrupados (0 off, 1 conservador, 2 qualquer arena) |
-| `SOTC_CLEAN_READS` | 1 | leituras limpas do walker SRT |
-| `SOTC_RB_AHEAD` | 1 | readback antecipado |
-| `SOTC_EARLY_Z` | 1 no SotC | testes de profundidade antecipados |
-| `SOTC_WAVE64_UNIFORM` | 1 no SotC | ramos uniformes wave64 e barreiras LDS |
-| `SOTC_LDS_BARRIERS` | 1 no SotC | barreiras de subgrupo em grupos com várias waves |
-| `SOTC_ARENA_RELEASE` | desligado | libera memória de arena no unmap (experimental) |
-| `SHADPS4_LOOP_LIMIT` | 8192 no SotC | iterações máximas de loop por shader |
-| `SHADPS4_REDZONE_PROTECT` | — | funções extras para proteção de red zone |
-| `SHADPS4_IEEE_MINMAX` | desligado | volta ao min/max/clamp antigo |
-| `SHADPS4_ABSOLUTE_INSTANCE_ID` | desligado | volta ao instance ID antigo |
-
-**Ferramentas de diagnóstico** (usadas para achar os defeitos; desligadas por padrão):
-- `SOTC_FRAME_LOG=N` — escreve a contagem de quadros e o tempo a cada N quadros (mede FPS).
-- `SOTC_PROBE="0xENDEREÇO:N,…"` (+ `SOTC_PROBE_MS`) — sensor: grava em `user/log/sotc_probe.txt` os valores que a GPU calcula durante o jogo (ex.: exposição automática).
-- `SOTC_DUMP=1` — com o RenderDoc desligado, **F12** salva em `user/log/dump_N/` as imagens reais de cada etapa da névoa volumétrica (achou o defeito do lago).
-- `SOTC_OCCLUSION_STEP` — muda o contador falso de occlusion query (testes A/B).
-- [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenera o patch de imagem (motion blur/sol) quando o recompilador muda.
-
-### Como usar
-1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
-2. **Áudio — sem isto o jogo fica MUDO:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\` (firmware da Sony, não pode ser distribuído aqui). Com GoldHEN: ative o FTP nas configurações do GoldHEN, conecte pelo PC (ex.: FileZilla) no IP do PS4, porta `2121`, abra `/system/common/lib/` e copie os dois arquivos. Se você já usa shadPS4 com outros jogos, copie-os da sua pasta `sys_modules`.
-3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
-4. A primeira abertura compila os shaders e demora mais.
-
-Testado em Windows 11, Intel i9-13900K e NVIDIA RTX 2060 SUPER 8 GB. Não testado em placas AMD/Intel nem em Linux/macOS.
-
-### Código-fonte
-Este repositório é o próprio shadPS4 (base `259e815a`) com as correções, commit por commit; o README original do shadPS4 está em [`README.shadPS4.md`](README.shadPS4.md). Compilação: igual ao shadPS4 ([`documents/building-windows.md`](documents/building-windows.md)). As correções genéricas estão marcadas no relatório como candidatas ao shadPS4 oficial.
-
----
-
-<a id="english"></a>
-**🇺🇸 English**
+>
+> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 
 **Unofficial** build of the [shadPS4](https://github.com/shadps4-emu/shadPS4) emulator with fixes for **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) on **Windows**. It is not distributed by the shadPS4 team. **No game files are included**: you need your own dump.
 
@@ -209,6 +105,110 @@ Tested on Windows 11, Intel i9-13900K and NVIDIA RTX 2060 SUPER 8 GB. Not tested
 
 ### Source code
 This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by commit; the original shadPS4 README is in [`README.shadPS4.md`](README.shadPS4.md). Building: same as shadPS4 ([`documents/building-windows.md`](documents/building-windows.md)). Generic fixes are marked in the report as upstream candidates.
+
+---
+
+<a id="portugues"></a>
+**🇧🇷 Português**
+
+Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
+
+### Baixar
+Na aba **[Releases](../../releases)**, baixe `SotC-shadPS4-fixes-2026-10-03.zip` (o "Source code" listado lá é só o código).
+
+### O que foi corrigido
+- Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
+- Menu com texto, raios de luz do templo, sem blocos pretos e sem retângulos no chão.
+- **Lago do pássaro:** sem clarões brancos em cruz nem pontos brancos piscando no horizonte quando o boss voa.
+- Exposição automática correta em placas NVIDIA; menos "fantasma" do desfoque de movimento e sol menos estourado.
+- 17–18 FPS no mundo aberto (era 13–15).
+
+Detalhes técnicos de cada correção (causa e solução): [`documents/SotC-RELATORIO-REPORT.html`](documents/SotC-RELATORIO-REPORT.html) (baixe e abra no navegador; PT e EN).
+
+### Lista completa de correções
+Cada item tem causa, solução e commits no [relatório técnico](documents/SotC-RELATORIO-REPORT.html). ✅ = candidata ao shadPS4 oficial (genérica); 🎮 = específica do SotC (ligada só para `CUSA08809`).
+
+**Núcleo e Windows**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 01 | ✅ Instruções SSE4a curtas realocadas | crash ~35 s em CPUs Intel (red zone apagada) |
+| 02 | ✅ Tratador de falhas numa pilha alternativa | jogo fechava sozinho, sem log |
+| 03 | ✅ Pilhas de thread/fibra nunca protegidas | quedas ao carregar o save |
+| 04 | ✅ Proteções de página refeitas após SplitRegion | GPU com dados velhos, travamento (TDR) |
+| 05 | 🎮 Proteção seletiva de red zone | crashes em 2 funções do jogo |
+
+**Vulkan e sincronização**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 06 | ✅ Máscara de estágio para cada semáforo de espera | travamentos/deadlock |
+| 07 | ✅ Device lost não congela o emulador | emulador preso para sempre |
+| 08 | ✅ Cópia de profundidade entre formatos via buffer | queda ao pular o vídeo de abertura |
+| 09 | ✅ Estágios não vazam entre pipelines do cache | crash nos primeiros quadros |
+| 10 | ✅ Coerência de leituras indiretas/vértice e fences | GPU usando dados velhos |
+| 11 | ✅ Memória de vídeo esgotada não aborta | queda em placas de 8 GB |
+| 12 | ✅ Sem deadlock entre tratador de falhas e texturas | congelamento |
+| 13 | ✅ Buffer de walkers SRT maior | crash no boot com cache grande |
+
+**Recompilador de shaders**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 14 | ✅ ReadLane wave64 em GPUs de subgrupo 32 | reduções erradas na NVIDIA |
+| 15 | 🎮 Ramos uniformes wave64 e barreiras LDS | faixas na iluminação |
+| 16 | 🎮 Testes de profundidade antes do pixel shader | retângulos escuros no chão |
+| 17 | ✅ ReadConst com índice dinâmico | blocos pretos (desfoque) |
+| 18 | ✅ Outras (V_MAD_LEGACY, descritores lixo, limite de loops…) | asserts e travamentos |
+| 24 | ✅ Comparações negadas com NaN | raios de luz do templo apagados |
+| 25 | ✅ Instance ID relativo ao início do desenho | clarões no lago do pássaro |
+| 26 | 🎮 Barreiras de subgrupo em reduções LDS | exposição automática errada |
+
+**Desempenho** (13–15 → 17–18 FPS)
+| # | Correção |
+|---|---|
+| 19 | 🎮 Envio periódico de comandos (o maior ganho) |
+| 20 | ✅ Readbacks agrupados |
+| 21 | ✅ Leituras limpas do walker SRT |
+| 22 | ✅ Readback antecipado |
+
+**Imagem**
+| # | Correção |
+|---|---|
+| 23 | 🎮 Patch de shader: menos "fantasma" do motion blur e sol 20% menos estourado |
+
+### Ferramentas e opções
+Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `.bat` com `set NOME=valor`). Os padrões já são os recomendados; mude só para testar.
+
+| Variável | Padrão | Para que serve |
+|---|---|---|
+| `SOTC_FLUSH_EVERY` | 256 no SotC | envio periódico de comandos; `0` desliga |
+| `SOTC_RB_HOT` | 2 | readbacks agrupados (0 off, 1 conservador, 2 qualquer arena) |
+| `SOTC_CLEAN_READS` | 1 | leituras limpas do walker SRT |
+| `SOTC_RB_AHEAD` | 1 | readback antecipado |
+| `SOTC_EARLY_Z` | 1 no SotC | testes de profundidade antecipados |
+| `SOTC_WAVE64_UNIFORM` | 1 no SotC | ramos uniformes wave64 e barreiras LDS |
+| `SOTC_LDS_BARRIERS` | 1 no SotC | barreiras de subgrupo em grupos com várias waves |
+| `SOTC_ARENA_RELEASE` | desligado | libera memória de arena no unmap (experimental) |
+| `SHADPS4_LOOP_LIMIT` | 8192 no SotC | iterações máximas de loop por shader |
+| `SHADPS4_REDZONE_PROTECT` | — | funções extras para proteção de red zone |
+| `SHADPS4_IEEE_MINMAX` | desligado | volta ao min/max/clamp antigo |
+| `SHADPS4_ABSOLUTE_INSTANCE_ID` | desligado | volta ao instance ID antigo |
+
+**Ferramentas de diagnóstico** (usadas para achar os defeitos; desligadas por padrão):
+- `SOTC_FRAME_LOG=N` — escreve a contagem de quadros e o tempo a cada N quadros (mede FPS).
+- `SOTC_PROBE="0xENDEREÇO:N,…"` (+ `SOTC_PROBE_MS`) — sensor: grava em `user/log/sotc_probe.txt` os valores que a GPU calcula durante o jogo (ex.: exposição automática).
+- `SOTC_DUMP=1` — com o RenderDoc desligado, **F12** salva em `user/log/dump_N/` as imagens reais de cada etapa da névoa volumétrica (achou o defeito do lago).
+- `SOTC_OCCLUSION_STEP` — muda o contador falso de occlusion query (testes A/B).
+- [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenera o patch de imagem (motion blur/sol) quando o recompilador muda.
+
+### Como usar
+1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
+2. **Áudio — sem isto o jogo fica MUDO:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\` (firmware da Sony, não pode ser distribuído aqui). Com GoldHEN: ative o FTP nas configurações do GoldHEN, conecte pelo PC (ex.: FileZilla) no IP do PS4, porta `2121`, abra `/system/common/lib/` e copie os dois arquivos. Se você já usa shadPS4 com outros jogos, copie-os da sua pasta `sys_modules`.
+3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
+4. A primeira abertura compila os shaders e demora mais.
+
+Testado em Windows 11, Intel i9-13900K e NVIDIA RTX 2060 SUPER 8 GB. Não testado em placas AMD/Intel nem em Linux/macOS.
+
+### Código-fonte
+Este repositório é o próprio shadPS4 (base `259e815a`) com as correções, commit por commit; o README original do shadPS4 está em [`README.shadPS4.md`](README.shadPS4.md). Compilação: igual ao shadPS4 ([`documents/building-windows.md`](documents/building-windows.md)). As correções genéricas estão marcadas no relatório como candidatas ao shadPS4 oficial.
 
 ---
 
