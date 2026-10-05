@@ -21,6 +21,80 @@ Na aba **[Releases](../../releases)**, baixe `SotC-shadPS4-fixes-2026-10-03.zip`
 
 Detalhes técnicos de cada correção (causa e solução): [`documents/SotC-RELATORIO-REPORT.html`](documents/SotC-RELATORIO-REPORT.html) (baixe e abra no navegador; PT e EN).
 
+### Lista completa de correções
+Cada item tem causa, solução e commits no [relatório técnico](documents/SotC-RELATORIO-REPORT.html). ✅ = candidata ao shadPS4 oficial (genérica); 🎮 = específica do SotC (ligada só para `CUSA08809`).
+
+**Núcleo e Windows**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 01 | ✅ Instruções SSE4a curtas realocadas | crash ~35 s em CPUs Intel (red zone apagada) |
+| 02 | ✅ Tratador de falhas numa pilha alternativa | jogo fechava sozinho, sem log |
+| 03 | ✅ Pilhas de thread/fibra nunca protegidas | quedas ao carregar o save |
+| 04 | ✅ Proteções de página refeitas após SplitRegion | GPU com dados velhos, travamento (TDR) |
+| 05 | 🎮 Proteção seletiva de red zone | crashes em 2 funções do jogo |
+
+**Vulkan e sincronização**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 06 | ✅ Máscara de estágio para cada semáforo de espera | travamentos/deadlock |
+| 07 | ✅ Device lost não congela o emulador | emulador preso para sempre |
+| 08 | ✅ Cópia de profundidade entre formatos via buffer | queda ao pular o vídeo de abertura |
+| 09 | ✅ Estágios não vazam entre pipelines do cache | crash nos primeiros quadros |
+| 10 | ✅ Coerência de leituras indiretas/vértice e fences | GPU usando dados velhos |
+| 11 | ✅ Memória de vídeo esgotada não aborta | queda em placas de 8 GB |
+| 12 | ✅ Sem deadlock entre tratador de falhas e texturas | congelamento |
+| 13 | ✅ Buffer de walkers SRT maior | crash no boot com cache grande |
+
+**Recompilador de shaders**
+| # | Correção | O que resolvia |
+|---|---|---|
+| 14 | ✅ ReadLane wave64 em GPUs de subgrupo 32 | reduções erradas na NVIDIA |
+| 15 | 🎮 Ramos uniformes wave64 e barreiras LDS | faixas na iluminação |
+| 16 | 🎮 Testes de profundidade antes do pixel shader | retângulos escuros no chão |
+| 17 | ✅ ReadConst com índice dinâmico | blocos pretos (desfoque) |
+| 18 | ✅ Outras (V_MAD_LEGACY, descritores lixo, limite de loops…) | asserts e travamentos |
+| 24 | ✅ Comparações negadas com NaN | raios de luz do templo apagados |
+| 25 | ✅ Instance ID relativo ao início do desenho | clarões no lago do pássaro |
+| 26 | 🎮 Barreiras de subgrupo em reduções LDS | exposição automática errada |
+
+**Desempenho** (13–15 → 17–18 FPS)
+| # | Correção |
+|---|---|
+| 19 | 🎮 Envio periódico de comandos (o maior ganho) |
+| 20 | ✅ Readbacks agrupados |
+| 21 | ✅ Leituras limpas do walker SRT |
+| 22 | ✅ Readback antecipado |
+
+**Imagem**
+| # | Correção |
+|---|---|
+| 23 | 🎮 Patch de shader: menos "fantasma" do motion blur e sol 20% menos estourado |
+
+### Ferramentas e opções
+Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `.bat` com `set NOME=valor`). Os padrões já são os recomendados; mude só para testar.
+
+| Variável | Padrão | Para que serve |
+|---|---|---|
+| `SOTC_FLUSH_EVERY` | 256 no SotC | envio periódico de comandos; `0` desliga |
+| `SOTC_RB_HOT` | 2 | readbacks agrupados (0 off, 1 conservador, 2 qualquer arena) |
+| `SOTC_CLEAN_READS` | 1 | leituras limpas do walker SRT |
+| `SOTC_RB_AHEAD` | 1 | readback antecipado |
+| `SOTC_EARLY_Z` | 1 no SotC | testes de profundidade antecipados |
+| `SOTC_WAVE64_UNIFORM` | 1 no SotC | ramos uniformes wave64 e barreiras LDS |
+| `SOTC_LDS_BARRIERS` | 1 no SotC | barreiras de subgrupo em grupos com várias waves |
+| `SOTC_ARENA_RELEASE` | desligado | libera memória de arena no unmap (experimental) |
+| `SHADPS4_LOOP_LIMIT` | 8192 no SotC | iterações máximas de loop por shader |
+| `SHADPS4_REDZONE_PROTECT` | — | funções extras para proteção de red zone |
+| `SHADPS4_IEEE_MINMAX` | desligado | volta ao min/max/clamp antigo |
+| `SHADPS4_ABSOLUTE_INSTANCE_ID` | desligado | volta ao instance ID antigo |
+
+**Ferramentas de diagnóstico** (usadas para achar os defeitos; desligadas por padrão):
+- `SOTC_FRAME_LOG=N` — escreve a contagem de quadros e o tempo a cada N quadros (mede FPS).
+- `SOTC_PROBE="0xENDEREÇO:N,…"` (+ `SOTC_PROBE_MS`) — sensor: grava em `user/log/sotc_probe.txt` os valores que a GPU calcula durante o jogo (ex.: exposição automática).
+- `SOTC_DUMP=1` — com o RenderDoc desligado, **F12** salva em `user/log/dump_N/` as imagens reais de cada etapa da névoa volumétrica (achou o defeito do lago).
+- `SOTC_OCCLUSION_STEP` — muda o contador falso de occlusion query (testes A/B).
+- [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenera o patch de imagem (motion blur/sol) quando o recompilador muda.
+
 ### Como usar
 1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
 2. **Áudio — sem isto o jogo fica MUDO:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\` (firmware da Sony, não pode ser distribuído aqui). Com GoldHEN: ative o FTP nas configurações do GoldHEN, conecte pelo PC (ex.: FileZilla) no IP do PS4, porta `2121`, abra `/system/common/lib/` e copie os dois arquivos. Se você já usa shadPS4 com outros jogos, copie-os da sua pasta `sys_modules`.
@@ -50,6 +124,80 @@ From the **[Releases](../../releases)** tab, get `SotC-shadPS4-fixes-2026-10-03.
 - 17–18 fps in the open world (was 13–15).
 
 Technical details of every fix (cause and solution): [`documents/SotC-RELATORIO-REPORT.html`](documents/SotC-RELATORIO-REPORT.html) (download and open in a browser; PT and EN).
+
+### Full list of fixes
+Every item has its cause, fix and commits in the [technical report](documents/SotC-RELATORIO-REPORT.html). ✅ = upstream candidate (generic); 🎮 = SotC-specific (enabled only for `CUSA08809`).
+
+**Core and Windows**
+| # | Fix | What it solved |
+|---|---|---|
+| 01 | ✅ Short SSE4a instructions relocated | crash around 35 s on Intel CPUs (red zone wiped) |
+| 02 | ✅ Fault handler on an alternate stack | game closing with no log |
+| 03 | ✅ Thread/fiber stacks never protected | crashes when loading the save |
+| 04 | ✅ Page protections reapplied after SplitRegion | stale GPU data, GPU hangs (TDR) |
+| 05 | 🎮 Selective red-zone protection | crashes in 2 game functions |
+
+**Vulkan and synchronization**
+| # | Fix | What it solved |
+|---|---|---|
+| 06 | ✅ A stage mask for every wait semaphore | stalls/deadlocks |
+| 07 | ✅ Device loss does not freeze the emulator | emulator stuck forever |
+| 08 | ✅ Depth copies between formats through a buffer | crash when skipping the intro video |
+| 09 | ✅ Stages no longer leak between cached pipelines | crash in the first frames |
+| 10 | ✅ Coherence of indirect/vertex reads and fences | GPU using stale data |
+| 11 | ✅ Running out of video memory does not abort | crash on 8 GB cards |
+| 12 | ✅ No deadlock between the fault handler and textures | freeze |
+| 13 | ✅ Larger SRT walker buffer | boot crash with a large cache |
+
+**Shader recompiler**
+| # | Fix | What it solved |
+|---|---|---|
+| 14 | ✅ Wave64 ReadLane on 32-wide subgroup GPUs | wrong reductions on NVIDIA |
+| 15 | 🎮 Wave64 uniform branches and LDS barriers | lighting stripes |
+| 16 | 🎮 Depth tests before the pixel shader | dark rectangles on the ground |
+| 17 | ✅ Runtime-indexed ReadConst | black blocks (depth of field) |
+| 18 | ✅ Others (V_MAD_LEGACY, garbage descriptors, loop budget…) | asserts and hangs |
+| 24 | ✅ Negated compares with NaN | temple light shafts wiped out |
+| 25 | ✅ Instance ID relative to the draw start | white flashes at the bird lake |
+| 26 | 🎮 Subgroup barriers in LDS reductions | wrong auto-exposure |
+
+**Performance** (13–15 → 17–18 fps)
+| # | Fix |
+|---|---|
+| 19 | 🎮 Periodic command submission (the biggest win) |
+| 20 | ✅ Batched readbacks |
+| 21 | ✅ Clean SRT walker reads |
+| 22 | ✅ Readback ahead |
+
+**Image**
+| # | Fix |
+|---|---|
+| 23 | 🎮 Shader patch: less motion-blur "ghosting" and a 20% less blown-out sun |
+
+### Tools and switches
+Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` with `set NAME=value`). The defaults are the recommended ones; change them only for testing.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SOTC_FLUSH_EVERY` | 256 for SotC | periodic command submission; `0` disables |
+| `SOTC_RB_HOT` | 2 | batched readbacks (0 off, 1 conservative, 2 any arena) |
+| `SOTC_CLEAN_READS` | 1 | clean SRT walker reads |
+| `SOTC_RB_AHEAD` | 1 | readback ahead |
+| `SOTC_EARLY_Z` | 1 for SotC | early depth tests |
+| `SOTC_WAVE64_UNIFORM` | 1 for SotC | wave64 uniform branches and LDS barriers |
+| `SOTC_LDS_BARRIERS` | 1 for SotC | subgroup barriers in multi-wave workgroups |
+| `SOTC_ARENA_RELEASE` | off | release arena memory on unmap (experimental) |
+| `SHADPS4_LOOP_LIMIT` | 8192 for SotC | maximum loop iterations per shader |
+| `SHADPS4_REDZONE_PROTECT` | — | extra functions for red-zone protection |
+| `SHADPS4_IEEE_MINMAX` | off | restores the old min/max/clamp |
+| `SHADPS4_ABSOLUTE_INSTANCE_ID` | off | restores the old instance ID |
+
+**Diagnostic tools** (used to find the bugs; off by default):
+- `SOTC_FRAME_LOG=N` — prints the frame count and time every N frames (measures fps).
+- `SOTC_PROBE="0xADDRESS:N,…"` (+ `SOTC_PROBE_MS`) — sensor: logs values the GPU computes while playing (e.g. auto-exposure) to `user/log/sotc_probe.txt`.
+- `SOTC_DUMP=1` — with RenderDoc off, **F12** saves the real images of every volumetric fog pass to `user/log/dump_N/` (this found the lake bug).
+- `SOTC_OCCLUSION_STEP` — overrides the fake occlusion query counter (A/B tests).
+- [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenerates the image patch (motion blur/sun) when the recompiler changes.
 
 ### How to use
 1. Extract the zip somewhere with free space (not "Program Files").
