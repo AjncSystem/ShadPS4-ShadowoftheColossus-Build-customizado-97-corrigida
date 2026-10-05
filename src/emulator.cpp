@@ -658,6 +658,10 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
                                        Common::g_scm_branch, Common::g_scm_desc, game_title);
         }
     }
+    // Version of the Shadow of the Colossus fixes build, shown right after "shadPS4".
+    constexpr std::string_view SotcBuildVersion = "SotC 0.2.5";
+    window_title.insert(sizeof("shadPS4 ") - 1, fmt::format("[{}] ", SotcBuildVersion));
+    LOG_INFO(Loader, "Build: {}", SotcBuildVersion);
     window = std::make_unique<Frontend::WindowSDL>(EmulatorSettings.GetWindowWidth(),
                                                    EmulatorSettings.GetWindowHeight(), controllers,
                                                    window_title);
