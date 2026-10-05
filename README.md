@@ -95,6 +95,16 @@ Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` 
 - `SOTC_OCCLUSION_STEP` — overrides the fake occlusion query counter (A/B tests).
 - [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenerates the image patch (motion blur/sun) when the recompiler changes.
 
+### Modes (Cheats / Patches menu)
+The package brings `user\patches\SotC-Modes`. In the launcher, right-click the game → **Cheats / Patches** → **Patches** tab → `SotC-Modes.xml`, tick a mode and click **Save**. Source: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
+
+| Mode | What it does | Measured (bird lake, RTX 2060 SUPER) |
+|---|---|---|
+| Sharp textures (16x AF) | 16x anisotropic filtering on every texture: ground, grass and rocks stay sharp at a distance | no fps cost (29.5 vs 28.5) |
+| 60 FPS | removes the game's 30 fps cap (illusion's GoldHEN patch) | 33 fps average, up to ~46 |
+
+Both can be combined. Do not enable *Sharp textures* together with the shadPS4 repository's *Custom Debug Menu Config* (they write to the same place). Not possible for now: 1440p/2160p (the game only renders them in PS4 Pro mode, which still crashes at boot in shadPS4) and 21:9/19:9 (the game has no resolution or aspect ratio setting to change).
+
 ### How to use
 1. Extract the zip somewhere with free space (not "Program Files").
 2. **Audio — without this the game is SILENT:** copy `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own** PS4 firmware into `user\sys_modules\` (Sony firmware, it cannot be distributed here). With GoldHEN: enable FTP in the GoldHEN settings, connect from the PC (e.g. FileZilla) to the PS4's IP, port `2121`, open `/system/common/lib/` and copy both files. If you already use shadPS4 with other games, copy them from your `sys_modules` folder.
@@ -198,6 +208,16 @@ Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `
 - `SOTC_DUMP=1` — com o RenderDoc desligado, **F12** salva em `user/log/dump_N/` as imagens reais de cada etapa da névoa volumétrica (achou o defeito do lago).
 - `SOTC_OCCLUSION_STEP` — muda o contador falso de occlusion query (testes A/B).
 - [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenera o patch de imagem (motion blur/sol) quando o recompilador muda.
+
+### Modos (menu Trapaças / Modificações)
+O pacote traz `user\patches\SotC-Modes`. No launcher, clique com o botão direito no jogo → **Trapaças / Modificações** → aba **Modificações** → `SotC-Modes.xml`, marque o modo e clique em **Salvar**. Fonte: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
+
+| Modo | O que faz | Medido (lago do pássaro, RTX 2060 SUPER) |
+|---|---|---|
+| Texturas nítidas (16x AF) | filtro anisotrópico 16x em todas as texturas: chão, grama e rochas ficam nítidos de longe | sem custo de FPS (29,5 vs 28,5) |
+| 60 FPS | tira o limite de 30 FPS do jogo (patch de illusion, GoldHEN) | média de 33 FPS, até ~46 |
+
+Os dois podem ser combinados. Não ligue *Texturas nítidas* junto com o *Custom Debug Menu Config* do repositório shadPS4 (escrevem no mesmo lugar). Ainda não é possível: 1440p/2160p (o jogo só renderiza assim no modo PS4 Pro, que ainda fecha no início no shadPS4) e 21:9/19:9 (o jogo não tem ajuste de resolução nem de proporção).
 
 ### Como usar
 1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").

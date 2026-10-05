@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<Patch>
+    <TitleID>
+        <ID>CUSA08809</ID>
+        <ID>CUSA08804</ID>
+        <ID>CUSA08034</ID>
+    </TitleID>
+    <Metadata Title="Shadow of the Colossus" Name="SotC Modo: Texturas nitidas / Sharp textures (16x AF)" Note="PT: filtro anisotropico 16x em todas as texturas (chao, grama e rochas ficam nitidos a distancia). Custo de FPS praticamente zero. Nao ligue junto com o patch 'Custom Debug Menu Config' (usam o mesmo espaco). EN: 16x anisotropic filtering on every texture (ground, grass and rocks stay sharp at a distance). Practically no fps cost. Do not enable together with 'Custom Debug Menu Config' (same patch slot)." Author="AjncSystem" PatchVer="1.0" AppVer="01.01" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="bytes" Address="0x009367b9" Value="488d35b574ac00"/>
+            <Line Type="utf8" Address="0x013fdc75" Value="+progSamplerAnisoLevel=16 +progSamplerAnisoLevel_BasePS4=16 +progSamplerAnisoLevel_Perf=16 +progSamplerAnisoLevel_Cinematic=16 +linearSamplerAnisoLevel=16"/>
+            <Line Type="bytes" Address="0x013fdd0f" Value="00"/>
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Shadow of the Colossus" Name="SotC Modo: 60 FPS (destrava o limite de 30 / unlocks the 30 fps cap)" Note="PT: tira o limite de 30 FPS do jogo (patch de illusion, GoldHEN). Nesta build mediu 33 FPS de media e ate ~46 FPS no lago do passaro; o ganho depende da sua placa de video. Pode ser ligado junto com Texturas nitidas. EN: removes the game's 30 fps cap (illusion's GoldHEN patch). In this build it measured 33 fps on average and up to ~46 fps at the bird lake; the gain depends on your GPU. Can be combined with Sharp textures." Author="illusion (GoldHEN)" PatchVer="1.0" AppVer="01.01" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="bytes" Address="0x01390090" Value="31c0c3"/>
+        </PatchList>
+    </Metadata>
+</Patch>
