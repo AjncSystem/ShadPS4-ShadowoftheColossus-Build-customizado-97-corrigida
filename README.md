@@ -3,9 +3,9 @@
 **🇧🇷 Português** · [English below](#english)
 
 > [!IMPORTANT]
-> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções.
+> **Para jogar, baixe o zip em [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 >
-> **To play, download the zip from [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes.
+> **To play, download the zip from [Releases](../../releases)** (`SotC-shadPS4-fixes-…zip`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
 
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
@@ -23,7 +23,7 @@ Detalhes técnicos de cada correção (causa e solução): [`documents/SotC-RELA
 
 ### Como usar
 1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
-2. **Áudio:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\`. Eles não podem ser distribuídos; sem eles o jogo fica mudo.
+2. **Áudio — sem isto o jogo fica MUDO:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\` (firmware da Sony, não pode ser distribuído aqui). Com GoldHEN: ative o FTP nas configurações do GoldHEN, conecte pelo PC (ex.: FileZilla) no IP do PS4, porta `2121`, abra `/system/common/lib/` e copie os dois arquivos. Se você já usa shadPS4 com outros jogos, copie-os da sua pasta `sys_modules`.
 3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
 4. A primeira abertura compila os shaders e demora mais.
 
@@ -53,7 +53,7 @@ Technical details of every fix (cause and solution): [`documents/SotC-RELATORIO-
 
 ### How to use
 1. Extract the zip somewhere with free space (not "Program Files").
-2. **Audio:** copy `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own** PS4 firmware into `user\sys_modules\`. They cannot be redistributed; without them the game is silent.
+2. **Audio — without this the game is SILENT:** copy `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own** PS4 firmware into `user\sys_modules\` (Sony firmware, it cannot be distributed here). With GoldHEN: enable FTP in the GoldHEN settings, connect from the PC (e.g. FileZilla) to the PS4's IP, port `2121`, open `/system/common/lib/` and copy both files. If you already use shadPS4 with other games, copy them from your `sys_modules` folder.
 3. Open the folder's `shadPS4QtLauncher.exe`: it comes preconfigured with this emulator (no automatic updates). The first time, pick your games folder, then double-click the game. You can also drag `eboot.bin` onto `Iniciar-SotC.bat`.
 4. The first start compiles the shaders and takes longer.
 
