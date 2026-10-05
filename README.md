@@ -24,7 +24,7 @@ Detalhes técnicos de cada correção (causa e solução): [`documents/SotC-RELA
 ### Como usar
 1. Extraia o zip numa pasta com espaço (não em "Arquivos de Programas").
 2. **Áudio:** copie `libSceNgs2.sprx` e `libSceUlt.sprx` do firmware do **seu** PS4 para `user\sys_modules\`. Eles não podem ser distribuídos; sem eles o jogo fica mudo.
-3. Arraste o `eboot.bin` do jogo para `Iniciar-SotC.bat`, ou use o `shadPS4QtLauncher.exe` incluído (adicione uma versão local apontando para o `shadPS4.exe` da pasta).
+3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
 4. A primeira abertura compila os shaders e demora mais.
 
 Testado em Windows 11, Intel i9-13900K e NVIDIA RTX 2060 SUPER 8 GB. Não testado em placas AMD/Intel nem em Linux/macOS.
@@ -54,7 +54,7 @@ Technical details of every fix (cause and solution): [`documents/SotC-RELATORIO-
 ### How to use
 1. Extract the zip somewhere with free space (not "Program Files").
 2. **Audio:** copy `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own** PS4 firmware into `user\sys_modules\`. They cannot be redistributed; without them the game is silent.
-3. Drag the game's `eboot.bin` onto `Iniciar-SotC.bat`, or use the included `shadPS4QtLauncher.exe` (add a local version pointing to this folder's `shadPS4.exe`).
+3. Open the folder's `shadPS4QtLauncher.exe`: it comes preconfigured with this emulator (no automatic updates). The first time, pick your games folder, then double-click the game. You can also drag `eboot.bin` onto `Iniciar-SotC.bat`.
 4. The first start compiles the shaders and takes longer.
 
 Tested on Windows 11, Intel i9-13900K and NVIDIA RTX 2060 SUPER 8 GB. Not tested on AMD/Intel GPUs, Linux or macOS.
