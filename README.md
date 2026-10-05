@@ -96,7 +96,7 @@ Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` 
 - [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenerates the image patch (motion blur/sun) when the recompiler changes.
 
 ### Modes (Cheats / Patches menu)
-The package brings `user\patches\SotC-Modes`. In the launcher, right-click the game → **Cheats / Patches** → **Patches** tab → `SotC-Modes.xml`, tick a mode and click **Save**. Source: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
+The package brings `user\patches\SotC-Modes` with **both modes already enabled**. To turn one off: in the launcher, right-click the game → **Cheats / Patches** → **Patches** tab → `SotC-Modes.xml`, untick it and click **Save**. Source: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
 
 | Mode | What it does | Measured (bird lake, RTX 2060 SUPER) |
 |---|---|---|
@@ -210,7 +210,7 @@ Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `
 - [`sotc/shader_patch/make_patch.py`](sotc/shader_patch) — regenera o patch de imagem (motion blur/sol) quando o recompilador muda.
 
 ### Modos (menu Trapaças / Modificações)
-O pacote traz `user\patches\SotC-Modes`. No launcher, clique com o botão direito no jogo → **Trapaças / Modificações** → aba **Modificações** → `SotC-Modes.xml`, marque o modo e clique em **Salvar**. Fonte: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
+O pacote traz `user\patches\SotC-Modes` com **os dois modos já ligados**. Para desligar um: no launcher, clique com o botão direito no jogo → **Trapaças / Modificações** → aba **Modificações** → `SotC-Modes.xml`, desmarque e clique em **Salvar**. Fonte: [`sotc/patches/SotC-Modes`](sotc/patches/SotC-Modes).
 
 | Modo | O que faz | Medido (lago do pássaro, RTX 2060 SUPER) |
 |---|---|---|
