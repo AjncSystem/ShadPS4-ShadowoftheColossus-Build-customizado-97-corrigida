@@ -203,6 +203,10 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
         // Shadow of the Colossus (EU 1.01): a tracked-page write at +0xF67EF7 clobbers a pointer
         // kept below rsp that +0xF67D2B then dereferences (null+0x6d0 on the title screen).
         {"CUSA08809", "eboot.bin", 0xF67D2B},
+        // Shadow of the Colossus (EU 1.01): leaf keeps its output pointer at [rsp-0x10] and
+        // floats down to [rsp-0x7c] while reading tracked memory (null+0x81c store in the
+        // open world).
+        {"CUSA08809", "eboot.bin", 0xF52530},
     };
     std::vector<uintptr_t> red_zone_selected;
     if (!use_static_windows_guest_red_zone_protection) {

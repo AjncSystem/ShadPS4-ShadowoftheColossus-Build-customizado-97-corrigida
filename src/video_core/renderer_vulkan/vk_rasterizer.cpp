@@ -531,7 +531,11 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
 
     // Map buffers for merged ranges
     for (auto& range : ranges_merged) {
-        const u64 size = memory->ClampRangeSize(range.base_address, range.GetSize());
+        u64 size = memory->ClampRangeSize(range.base_address, range.GetSize());
+        if (size == 0) {
+            // Start is not mapped (garbage vertex sharp): keep a small range instead of GBs.
+            size = std::min<u64>(range.GetSize(), 4096);
+        }
         std::tie(range.buffer, range.offset) =
             buffer_cache.ObtainBuffer(range.base_address, size, false);
         needs_barrier |= runtime.IsBufferAccessed(range.buffer, range.offset, size);
@@ -902,13 +906,19 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
-            if (vsharp.base_address == 0 || vsharp.GetSize() == 0 ||
-                !memory->IsValidMapping(vsharp.base_address)) {
-                // Unmapped addresses show up in descriptors of bindings the shader does not use
-                // (garbage left in the guest's descriptor memory); bind nothing instead of aborting.
+            // Unmapped addresses show up in descriptors of bindings the shader does not use
+            // (garbage left in the guest's descriptor memory); bind nothing instead of aborting.
+            // Large ranges get clamped to the mapped memory at their start (0 if unmapped);
+            // written bindings are checked as well, so garbage cannot become GPU-modified memory.
+            u64 size = 0;
+            if (vsharp.base_address != 0 && vsharp.GetSize() != 0 &&
+                memory->IsValidMapping(vsharp.base_address) &&
+                (!desc.is_written || memory->IsMappedAddress(vsharp.base_address))) {
+                size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
+            }
+            if (size == 0) {
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
-                u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
                 // Guest code commonly marks a buffer as unbounded with num_records near 4GB and
                 // only touches a small part of it, and descriptors of unused bindings can hold
                 // garbage sizes of several GB. Backing such ranges makes the buffer cache keep
@@ -951,6 +961,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    Core::MemoryManager::NoteHostWrite(vsharp.base_address, size, 7,
+                                                       stage.pgm_hash);
                 }
                 needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
             }

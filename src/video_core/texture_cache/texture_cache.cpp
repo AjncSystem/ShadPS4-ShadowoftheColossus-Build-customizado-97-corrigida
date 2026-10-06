@@ -24,6 +24,15 @@ namespace VideoCore {
 static constexpr u64 PageShift = 12;
 static constexpr u64 NumFramesBeforeRemoval = 32;
 
+/// Writes downloaded image data back to guest memory, leaving out guest stack pages (never
+/// protected, the CPU may hold newer data there).
+static void WriteBackSkippingStacks(VAddr guest_address, const u8* data, u64 size) {
+    ForEachNonStackRange(guest_address, size, [&](VAddr addr, u64 part) {
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(addr),
+                                                  data + (addr - guest_address), part, 3);
+    });
+}
+
 TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
                            Vulkan::Runtime& runtime_, AmdGpu::Liverpool* liverpool_,
                            BufferCache& buffer_cache_, PageManager& tracker_)
@@ -108,14 +117,12 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     if (sync) {
         scheduler.Finish();
         download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(image.info.guest_address),
-                                                  download.mapped, download_size);
+        WriteBackSkippingStacks(image.info.guest_address, download.mapped, download_size);
     } else {
         scheduler.DeferPriorityOperation(
             [this, device_addr = image.info.guest_address, download, download_size] {
                 download.Invalidate();
-                Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
-                                                          download.mapped, download_size);
+                WriteBackSkippingStacks(device_addr, download.mapped, download_size);
                 runtime.GetStagingPool().FreeDeferred(download);
             });
     }

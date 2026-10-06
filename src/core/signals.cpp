@@ -9,6 +9,7 @@
 #include "core/cpu_patches.h" // Windows static guest red-zone protection
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/threads/exception.h"
+#include "core/memory.h"
 #include "core/signals.h"
 #include "emulator.h"
 
@@ -154,6 +155,19 @@ static LONG WINAPI SignalHandlerImpl(EXCEPTION_POINTERS* pExp) noexcept {
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
     if (report_unhandled) {
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
+        if (std::getenv("SOTC_WRITE_RING")) {
+            const CONTEXT& c = *pExp->ContextRecord;
+            const u64 fault_addr = code == EXCEPTION_ACCESS_VIOLATION
+                                       ? pExp->ExceptionRecord->ExceptionInformation[1]
+                                       : 0;
+            const u64 values[] = {fault_addr, c.Rax, c.Rbx, c.Rcx, c.Rdx, c.Rsi, c.Rdi, c.Rbp,
+                                  c.Rsp,      c.R8,  c.R9,  c.R10, c.R11, c.R12, c.R13, c.R14,
+                                  c.R15};
+            static constexpr const char* names[] = {"fault", "rax", "rbx", "rcx", "rdx", "rsi",
+                                                    "rdi",   "rbp", "rsp", "r8",  "r9",  "r10",
+                                                    "r11",   "r12", "r13", "r14", "r15"};
+            Core::Memory::Instance()->DumpHostWritesNear(values, names, std::size(values));
+        }
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 

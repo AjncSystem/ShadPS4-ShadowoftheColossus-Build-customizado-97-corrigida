@@ -13,6 +13,7 @@
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
 #include "video_core/buffer_cache/region_definitions.h"
+#include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -107,6 +108,8 @@ void BufferCache::TickFrame() {
 }
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks) {
+    Core::MemoryManager::NoteHostWrite(device_addr, size, 9,
+                                       reinterpret_cast<u64>(__builtin_return_address(0)));
     memory_tracker->InvalidateRegion(device_addr, size, [this, device_addr, size, assume_locks] {
         ReadMemory(device_addr, size, true, assume_locks);
     });
@@ -126,6 +129,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
+        Core::MemoryManager::NoteHostWrite(device_addr, size, 6, window_start);
         DownloadMemory(arena, window_start, window_end - window_start);
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
@@ -309,9 +313,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     download.buffer->Invalidate(download.offset, download.size);
     for (const auto& item : pending) {
         for (const auto& copy : item.copies) {
-            auto* dst_addr = std::bit_cast<u8*>(item.arena->cpu_addr + copy.srcOffset);
-            memory->TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
-                                    copy.size);
+            const VAddr dst_addr = item.arena->cpu_addr + copy.srcOffset;
+            const u8* src = download.mapped + (copy.dstOffset - download.offset);
+            ForEachNonStackRange(dst_addr, copy.size, [&](VAddr addr, u64 size) {
+                memory->TryWriteBacking(std::bit_cast<u8*>(addr), src + (addr - dst_addr), size,
+                                        1);
+            });
         }
         memory_tracker->UnmarkRegionAsGpuModified(item.addr, item.size, false);
     }
@@ -335,6 +342,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         SynchronizeMemoryFromImage(arena, device_addr, size);
     }
     if (is_written) {
+        Core::MemoryManager::NoteHostWrite(
+            device_addr, size, 8, reinterpret_cast<u64>(__builtin_return_address(0)));
         AddGpuModified(device_addr, size);
         RecordCurrentWrite(device_addr, size);
     }

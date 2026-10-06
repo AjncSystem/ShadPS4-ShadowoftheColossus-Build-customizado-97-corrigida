@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include "common/alignment.h"
 #include "common/types.h"
@@ -20,6 +21,11 @@ namespace VideoCore {
 /// process without running any handler.
 void RegisterGuestStack(VAddr address, u64 size);
 void UnregisterGuestStack(VAddr address, u64 size);
+
+/// Calls func(address, size) for the parts of the range outside registered guest stacks.
+/// Those pages are never protected, so the CPU may have written them without the tracker
+/// noticing: GPU data read back must not be written over them.
+void ForEachNonStackRange(VAddr address, u64 size, const std::function<void(VAddr, u64)>& func);
 
 struct UffdImpl;
 struct SignalImpl;

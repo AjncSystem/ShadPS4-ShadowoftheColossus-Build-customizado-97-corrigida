@@ -248,6 +248,11 @@ public:
         return size_to_validate <= 0;
     }
 
+    /// True when the address lies in a mapped VMA (not free or only reserved).
+    bool IsMappedAddress(VAddr virtual_addr);
+
+    /// Clamps a GPU range to the contiguous mapped memory at its start; 0 when the start is
+    /// not mapped.
     u64 ClampRangeSize(VAddr virtual_addr, u64 size);
 
     void SetPrtArea(u32 id, VAddr address, u64 size);
@@ -264,7 +269,18 @@ public:
         return entry && *entry ? *entry + (address % 16_KB) : nullptr;
     }
 
-    bool TryWriteBacking(void* address, const void* data, u64 size);
+    /// source tags the writer for the SOTC_WRITE_RING diagnostic (1 buffer readback, 2 fence,
+    /// 3 texture readback).
+    bool TryWriteBacking(void* address, const void* data, u64 size, u32 source = 0);
+
+    /// SOTC_WRITE_RING diagnostic: prints the recent host writes into guest memory that land
+    /// near any of the given guest addresses (called when the guest crashes).
+    void DumpHostWritesNear(const u64* values, const char* const* names, size_t count);
+
+    /// SOTC_WRITE_RING diagnostic: records a host write made directly through the guest
+    /// address (4 WriteData, 5 DumpConstRam) or a related event (6 readback request, extra =
+    /// window start; 7 written GPU binding, extra = shader hash).
+    static void NoteHostWrite(VAddr va, u64 size, u32 source, u64 extra = ~0ULL);
 
     void SetupMemoryRegions(u64 flexible_size, bool use_extended_mem1, bool use_extended_mem2);
 

@@ -89,7 +89,7 @@ void Liverpool::WriteFenceValue(void* address, u64 data, u32 num_bytes) {
         rasterizer->InvalidateMemory(std::bit_cast<VAddr>(address), num_bytes, true);
     }
     auto* memory = Core::Memory::Instance();
-    ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+    ASSERT(memory->TryWriteBacking(address, &data, num_bytes, 2));
 }
 
 void Liverpool::ProcessCommands() {
@@ -199,6 +199,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             const auto* dump_const = reinterpret_cast<const PM4DumpConstRam*>(header);
             memcpy(dump_const->Address<void*>(),
                    cblock.constants_heap.data() + dump_const->Offset(), dump_const->Size());
+            Core::MemoryManager::NoteHostWrite(dump_const->Address<VAddr>(), dump_const->Size(), 5);
             break;
         }
         case PM4ItOpcode::IncrementCeCounter: {
@@ -753,6 +754,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         rasterizer->OnFence();
                     }
                     std::memcpy(address, write_data->data, data_size);
+                    Core::MemoryManager::NoteHostWrite(std::bit_cast<VAddr>(address), data_size, 4);
                 } else {
                     UNREACHABLE();
                 }
@@ -1093,6 +1095,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                     rasterizer->OnFence();
                 }
                 std::memcpy(write_data->Address<void*>(), write_data->data, data_size);
+                Core::MemoryManager::NoteHostWrite(write_data->Address<VAddr>(), data_size, 4);
             } else {
                 UNREACHABLE();
             }

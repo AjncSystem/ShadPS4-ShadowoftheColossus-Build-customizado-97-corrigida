@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <intrin.h>
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -99,6 +101,14 @@ void MemoryManager::SetupMemoryRegions(u64 flexible_size, bool use_extended_mem1
              total_flexible_size, total_direct_size);
 }
 
+bool MemoryManager::IsMappedAddress(VAddr virtual_addr) {
+    std::shared_lock lk{mutex};
+    if (!IsValidMapping(virtual_addr)) {
+        return false;
+    }
+    return FindVMA(virtual_addr)->second.IsMapped();
+}
+
 u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     static constexpr u64 MinSizeToClamp = 1_GB;
     // Dont bother with clamping if the size is small so we dont pay a map lookup on every buffer.
@@ -112,6 +122,12 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
 
     // Clamp size to the remaining size of the current VMA.
     auto vma = FindVMA(virtual_addr);
+    if (!vma->second.IsMapped()) {
+        // A descriptor built from garbage (stale or overwritten guest memory) can point into a
+        // hole of the address space with a size of several GB. Backing it would only exhaust
+        // video memory, there is nothing to read there.
+        return 0;
+    }
     u64 clamped_size = vma->second.base + vma->second.size - virtual_addr;
     ++vma;
 
@@ -179,7 +195,109 @@ bool MemoryManager::TryCopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) 
     return true;
 }
 
-bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
+extern "C" char __ImageBase;
+
+namespace {
+struct HostWriteRecord {
+    VAddr va;
+    PAddr pa;
+    u64 size;
+    u64 tsc;
+    u32 source;
+};
+constexpr u64 HostWriteRingSize = 1 << 20;
+HostWriteRecord* g_write_ring = nullptr;
+std::atomic<u64> g_write_ring_pos{0};
+const bool g_write_ring_enabled = [] {
+    if (std::getenv("SOTC_WRITE_RING") == nullptr) {
+        return false;
+    }
+    g_write_ring = new HostWriteRecord[HostWriteRingSize]{};
+    return true;
+}();
+
+void RecordHostWrite(VAddr va, PAddr pa, u64 size, u32 source) {
+    const u64 index = g_write_ring_pos.fetch_add(1, std::memory_order_relaxed);
+    g_write_ring[index % HostWriteRingSize] = {va, pa, size, __rdtsc(), source};
+}
+} // Anonymous namespace
+
+void MemoryManager::NoteHostWrite(VAddr va, u64 size, u32 source, u64 extra) {
+    if (g_write_ring_enabled) {
+        RecordHostWrite(va, extra, size, source);
+    }
+}
+
+void MemoryManager::DumpHostWritesNear(const u64* values, const char* const* names,
+                                       size_t count) {
+    // Runs from the crash handler: never re-enter (a fault in here would loop forever) and only
+    // look at the VMA map when its lock is free.
+    static std::atomic<bool> dumping{false};
+    if (!g_write_ring_enabled || dumping.exchange(true)) {
+        return;
+    }
+    constexpr u64 Near = 0x1000;
+    const u64 now = __rdtsc();
+    const u64 end = g_write_ring_pos.load();
+    const u64 begin = end > HostWriteRingSize ? end - HostWriteRingSize : 0;
+    const bool vma_locked = mutex.try_lock_shared();
+    LOG_CRITICAL(Debug,
+                 "SOTCRING {} host writes recorded, checking {} values (vma map {}), exe base {}",
+                 end, count, vma_locked ? "locked" : "busy", fmt::ptr(&__ImageBase));
+    for (size_t i = 0; i < count; ++i) {
+        const VAddr v = values[i];
+        // Translate to physical too: the same memory can be mapped at several addresses.
+        PAddr p = static_cast<PAddr>(-1);
+        const u8* bytes = nullptr;
+        if (vma_locked && !vma_map.empty() && v >= vma_map.begin()->first) {
+            auto it = vma_map.upper_bound(v);
+            const auto& vma = std::prev(it)->second;
+            if (vma.Contains(v, 16) && vma.type == VMAType::Direct && !vma.phys_areas.empty()) {
+                const u64 off = v - vma.base;
+                auto ph = vma.phys_areas.upper_bound(off);
+                if (ph != vma.phys_areas.begin()) {
+                    --ph;
+                    if (off - ph->first < ph->second.size) {
+                        p = ph->second.base + off - ph->first;
+                        if (off - ph->first + 16 <= ph->second.size) {
+                            bytes = impl.BackingBase() + p;
+                        }
+                    }
+                }
+            }
+        }
+        u64 q0 = 0, q1 = 0;
+        if (bytes) {
+            std::memcpy(&q0, bytes, 8);
+            std::memcpy(&q1, bytes + 8, 8);
+        }
+        LOG_CRITICAL(Debug, "SOTCRING {}={:#x} pa={:#x} mem=[{:#018x} {:#018x}]", names[i], v, p,
+                     q0, q1);
+        u32 shown[5] = {};
+        for (u64 n = end; n > begin; --n) {
+            const auto& r = g_write_ring[(n - 1) % HostWriteRingSize];
+            const bool va_hit = v + Near > r.va && v < r.va + r.size + Near;
+            const bool pa_hit = r.source < 4 && p != static_cast<PAddr>(-1) && p + Near > r.pa &&
+                                p < r.pa + r.size + Near;
+            // 0: memory writes (1-5), 1: readback requests (6), 2: written bindings (7),
+            // 3: GPU-modified marks (8), 4: CPU-side invalidations (9).
+            const u32 kind = r.source < 6 ? 0 : r.source - 5;
+            const u32 limit = 8;
+            if ((va_hit || pa_hit) && shown[kind] < limit) {
+                ++shown[kind];
+                LOG_CRITICAL(Debug,
+                             "SOTCRING   #{} src={} va={:#x} pa/extra={:#x} size={:#x} age={:.1f}ms{}",
+                             end - n, r.source, r.va, r.pa, r.size, (now - r.tsc) / 3.0e6,
+                             va_hit ? "" : " (alias)");
+            }
+        }
+    }
+    if (vma_locked) {
+        mutex.unlock_shared();
+    }
+}
+
+bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size, u32 source) {
     const VAddr virtual_addr = std::bit_cast<VAddr>(address);
     std::shared_lock lk{mutex};
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
@@ -199,6 +317,9 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
         return false;
     }
 
+    // The range can span several VMAs and physical areas (games map memory in small adjacent
+    // pieces); each piece must take its own part of the source, not the start of it again.
+    const u8* src = static_cast<const u8*>(data);
     for (auto& vma : vmas_to_write) {
         auto start_in_vma = std::max<VAddr>(virtual_addr, vma.base) - vma.base;
         auto phys_handle = std::prev(vma.phys_areas.upper_bound(start_in_vma));
@@ -210,7 +331,12 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
                 std::max<u64>(start_in_vma, phys_handle->first) - phys_handle->first;
             u8* backing = impl.BackingBase() + phys_handle->second.base + start_in_dma;
             u64 copy_size = std::min<u64>(size, phys_handle->second.size - start_in_dma);
-            memcpy(backing, data, copy_size);
+            memcpy(backing, src, copy_size);
+            if (g_write_ring_enabled) {
+                RecordHostWrite(vma.base + std::max<u64>(start_in_vma, phys_handle->first),
+                                phys_handle->second.base + start_in_dma, copy_size, source);
+            }
+            src += copy_size;
             size -= copy_size;
         }
     }

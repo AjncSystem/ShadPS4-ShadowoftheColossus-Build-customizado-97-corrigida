@@ -48,6 +48,8 @@ std::mutex g_guest_stacks_mutex;
 // Reference counted: the margin below one stack often covers a neighbouring stack (games pack
 // fiber stacks back to back), so finalizing one must not drop the other's protection.
 boost::icl::interval_map<VAddr, u32> g_guest_stacks;
+// Re-applies the tracker's protection to pages that stop being stack pages.
+std::function<void(VAddr, u64)> g_reapply_protection;
 } // namespace
 
 // The exception frame is written below the faulting stack pointer, so a nearly full stack also
@@ -58,16 +60,15 @@ void RegisterGuestStack(VAddr address, u64 size) {
     if (size == 0) {
         return;
     }
-    address -= GuestStackMargin;
-    size += GuestStackMargin;
+    // Whole pages: protection is page granular, so a page shared with a stack is a stack page
+    // for the tracker too (never protected, never written back over).
+    const VAddr begin = Common::AlignDown(address - GuestStackMargin, VAddr{4096});
+    const VAddr end = Common::AlignUp(address + size, VAddr{4096});
     {
         std::scoped_lock lk{g_guest_stacks_mutex};
-        g_guest_stacks +=
-            std::make_pair(boost::icl::interval<VAddr>::right_open(address, address + size), 1u);
+        g_guest_stacks += std::make_pair(boost::icl::interval<VAddr>::right_open(begin, end), 1u);
     }
     // Memory the guest hands over as a stack may already be tracked; make it accessible now.
-    const VAddr begin = Common::AlignDown(address, VAddr{4096});
-    const VAddr end = Common::AlignUp(address + size, VAddr{4096});
     Core::Memory::Instance()->GetAddressSpace().Protect(begin, end - begin,
                                                         Core::MemoryPermission::ReadWrite);
 }
@@ -76,11 +77,50 @@ void UnregisterGuestStack(VAddr address, u64 size) {
     if (size == 0) {
         return;
     }
-    address -= GuestStackMargin;
-    size += GuestStackMargin;
-    std::scoped_lock lk{g_guest_stacks_mutex};
-    g_guest_stacks -=
-        std::make_pair(boost::icl::interval<VAddr>::right_open(address, address + size), 1u);
+    const VAddr begin = Common::AlignDown(address - GuestStackMargin, VAddr{4096});
+    const VAddr end = Common::AlignUp(address + size, VAddr{4096});
+    {
+        std::scoped_lock lk{g_guest_stacks_mutex};
+        g_guest_stacks -= std::make_pair(boost::icl::interval<VAddr>::right_open(begin, end), 1u);
+    }
+    // The pages were left accessible while they were a stack: give the tracker its protection
+    // back, or CPU writes there would go unnoticed (pages still used by another stack stay).
+    if (g_reapply_protection) {
+        g_reapply_protection(begin, end - begin);
+    }
+}
+
+void ForEachNonStackRange(VAddr address, u64 size, const std::function<void(VAddr, u64)>& func) {
+    if (size == 0) {
+        return;
+    }
+    boost::icl::interval_set<VAddr> ranges;
+    const auto window = boost::icl::interval<VAddr>::right_open(address, address + size);
+    bool overlaps = false;
+    {
+        std::scoped_lock lk{g_guest_stacks_mutex};
+        const auto [first, last] = g_guest_stacks.equal_range(window);
+        if (first != last) {
+            overlaps = true;
+            ranges += window;
+            for (auto it = first; it != last; ++it) {
+                ranges -= it->first;
+            }
+        }
+    }
+    if (!overlaps) {
+        // Common case: nothing of the range is a stack.
+        func(address, size);
+        return;
+    }
+    static std::atomic<u32> reported{0};
+    if (reported++ < 8) {
+        LOG_WARNING(Render, "Not writing GPU data back over guest stack pages in {:#x}+{:#x}",
+                    address, size);
+    }
+    for (const auto& range : ranges) {
+        func(range.lower(), range.upper() - range.lower());
+    }
 }
 
 struct PageManager::Impl {
@@ -510,6 +550,9 @@ struct SignalImpl : public PageManager::Impl {
         // default protection, silently dropping the write/read tracking of those pages.
         Core::Memory::Instance()->GetAddressSpace().SetRemapCallback(
             [this](VAddr address, u64 size) { ReapplyProtection(address, size); });
+        g_reapply_protection = [this](VAddr address, u64 size) {
+            ReapplyProtection(address, size);
+        };
 
         // Should be called first.
         constexpr auto priority = std::numeric_limits<u32>::min();
