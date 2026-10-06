@@ -1,16 +1,16 @@
-# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.6
+# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.7
 
 **🇺🇸 English** · [Português abaixo](#portugues)
 
 > [!IMPORTANT]
-> **To play, download SotC 0.2.6 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.6.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
+> **To play, download SotC 0.2.7 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.7.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
 >
-> **Para jogar, baixe o SotC 0.2.6 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.6.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
+> **Para jogar, baixe o SotC 0.2.7 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.7.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 
 **Unofficial** build of the [shadPS4](https://github.com/shadps4-emu/shadPS4) emulator with fixes for **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) on **Windows**. It is not distributed by the shadPS4 team. **No game files are included**: you need your own dump.
 
 ### Download
-From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.6.rar` — version **SotC 0.2.6**, shown in the emulator window title (the "Source code" entries there are only the code).
+From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.7.rar` — version **SotC 0.2.7**, shown in the emulator window title (the "Source code" entries there are only the code).
 
 ### What is fixed
 - No GPU hang in the intro and no crashes when skipping the intro video or loading the save.
@@ -128,7 +128,7 @@ This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by co
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
 ### Baixar
-Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.6.rar` — versão **SotC 0.2.6**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
+Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.7.rar` — versão **SotC 0.2.7**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
 
 ### O que foi corrigido
 - Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
