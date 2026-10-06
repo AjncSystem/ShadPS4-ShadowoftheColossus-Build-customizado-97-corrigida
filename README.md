@@ -1,16 +1,16 @@
-# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.5
+# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.6
 
 **🇺🇸 English** · [Português abaixo](#portugues)
 
 > [!IMPORTANT]
-> **To play, download SotC 0.2.5 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.5.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
+> **To play, download SotC 0.2.6 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.6.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
 >
-> **Para jogar, baixe o SotC 0.2.5 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.5.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
+> **Para jogar, baixe o SotC 0.2.6 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.6.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 
 **Unofficial** build of the [shadPS4](https://github.com/shadps4-emu/shadPS4) emulator with fixes for **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) on **Windows**. It is not distributed by the shadPS4 team. **No game files are included**: you need your own dump.
 
 ### Download
-From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.5.rar` — version **SotC 0.2.5**, shown in the emulator window title (the "Source code" entries there are only the code).
+From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.6.rar` — version **SotC 0.2.6**, shown in the emulator window title (the "Source code" entries there are only the code).
 
 ### What is fixed
 - No GPU hang in the intro and no crashes when skipping the intro video or loading the save.
@@ -31,7 +31,7 @@ Every item has its cause, fix and commits in the [technical report](documents/So
 | 02 | ✅ Fault handler on an alternate stack | game closing with no log |
 | 03 | ✅ Thread/fiber stacks never protected | crashes when loading the save |
 | 04 | ✅ Page protections reapplied after SplitRegion | stale GPU data, GPU hangs (TDR) |
-| 05 | 🎮 Selective red-zone protection | crashes in 2 game functions |
+| 05 | 🎮 Selective red-zone protection | crashes in 3 game functions |
 
 **Vulkan and synchronization**
 | # | Fix | What it solved |
@@ -44,6 +44,9 @@ Every item has its cause, fix and commits in the [technical report](documents/So
 | 11 | ✅ Running out of video memory does not abort | crash on 8 GB cards |
 | 12 | ✅ No deadlock between the fault handler and textures | freeze |
 | 13 | ✅ Larger SRT walker buffer | boot crash with a large cache |
+| 27 | ✅ Stack pages tracked as whole pages; GPU read-backs never write over them | random crashes after a few minutes (game heap corrupted) |
+| 28 | ✅ GPU read-back across several memory mappings (upstream bug) | corrupted game memory |
+| 29 | ✅ Buffers at unmapped (garbage) addresses bound as null | crash in the opening cutscene (video memory exhausted) |
 
 **Shader recompiler**
 | # | Fix | What it solved |
@@ -90,6 +93,7 @@ Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` 
 
 **Diagnostic tools** (used to find the bugs; off by default):
 - `SOTC_FRAME_LOG=N` — prints the frame count and time every N frames (measures fps).
+- `SOTC_WRITE_RING=1` — records the emulator's writes into game memory and, if the game crashes, logs which of them landed next to the crash (`SOTCRING` lines).
 - `SOTC_PROBE="0xADDRESS:N,…"` (+ `SOTC_PROBE_MS`) — sensor: logs values the GPU computes while playing (e.g. auto-exposure) to `user/log/sotc_probe.txt`.
 - `SOTC_DUMP=1` — with RenderDoc off, **F12** saves the real images of every volumetric fog pass to `user/log/dump_N/` (this found the lake bug).
 - `SOTC_OCCLUSION_STEP` — overrides the fake occlusion query counter (A/B tests).
@@ -124,7 +128,7 @@ This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by co
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
 ### Baixar
-Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.5.rar` — versão **SotC 0.2.5**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
+Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.6.rar` — versão **SotC 0.2.6**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
 
 ### O que foi corrigido
 - Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
@@ -145,7 +149,7 @@ Cada item tem causa, solução e commits no [relatório técnico](documents/SotC
 | 02 | ✅ Tratador de falhas numa pilha alternativa | jogo fechava sozinho, sem log |
 | 03 | ✅ Pilhas de thread/fibra nunca protegidas | quedas ao carregar o save |
 | 04 | ✅ Proteções de página refeitas após SplitRegion | GPU com dados velhos, travamento (TDR) |
-| 05 | 🎮 Proteção seletiva de red zone | crashes em 2 funções do jogo |
+| 05 | 🎮 Proteção seletiva de red zone | crashes em 3 funções do jogo |
 
 **Vulkan e sincronização**
 | # | Correção | O que resolvia |
@@ -158,6 +162,9 @@ Cada item tem causa, solução e commits no [relatório técnico](documents/SotC
 | 11 | ✅ Memória de vídeo esgotada não aborta | queda em placas de 8 GB |
 | 12 | ✅ Sem deadlock entre tratador de falhas e texturas | congelamento |
 | 13 | ✅ Buffer de walkers SRT maior | crash no boot com cache grande |
+| 27 | ✅ Páginas de pilha tratadas como páginas inteiras; readback da GPU nunca escreve nelas | quedas aleatórias após alguns minutos (heap do jogo corrompido) |
+| 28 | ✅ Readback da GPU atravessando vários mapeamentos de memória (bug do upstream) | memória do jogo corrompida |
+| 29 | ✅ Buffers em endereços não mapeados (lixo) ligados como nulos | queda na cena de abertura (memória de vídeo esgotada) |
 
 **Recompilador de shaders**
 | # | Correção | O que resolvia |
@@ -204,6 +211,7 @@ Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `
 
 **Ferramentas de diagnóstico** (usadas para achar os defeitos; desligadas por padrão):
 - `SOTC_FRAME_LOG=N` — escreve a contagem de quadros e o tempo a cada N quadros (mede FPS).
+- `SOTC_WRITE_RING=1` — registra as escritas do emulador na memória do jogo e, se o jogo cair, mostra no log quais caíram perto do crash (linhas `SOTCRING`).
 - `SOTC_PROBE="0xENDEREÇO:N,…"` (+ `SOTC_PROBE_MS`) — sensor: grava em `user/log/sotc_probe.txt` os valores que a GPU calcula durante o jogo (ex.: exposição automática).
 - `SOTC_DUMP=1` — com o RenderDoc desligado, **F12** salva em `user/log/dump_N/` as imagens reais de cada etapa da névoa volumétrica (achou o defeito do lago).
 - `SOTC_OCCLUSION_STEP` — muda o contador falso de occlusion query (testes A/B).
