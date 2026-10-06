@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <ranges>
+#include <xxhash.h>
 
 #include "common/elf_info.h"
 #include "common/hash.h"
@@ -649,7 +650,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 
     vk::ShaderModule module;
 
-    auto patch = GetShaderPatch(info.pgm_hash, info.hw_stage, perm_idx, "spv");
+    auto patch = GetShaderPatch(info.pgm_hash, info.hw_stage, perm_idx, "spv", spv);
     const bool is_patched = patch && EmulatorSettings.IsPatchShaders();
     if (is_patched) {
         LOG_INFO(Loader, "Loaded patch for {} shader {:#x}", info.hw_stage, info.pgm_hash);
@@ -774,8 +775,8 @@ void PipelineCache::DumpShader(std::span<const u32> code, u64 hash, Shader::HwSt
 }
 
 std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::HwStage stage,
-                                                              size_t perm_idx,
-                                                              std::string_view ext) {
+                                                              size_t perm_idx, std::string_view ext,
+                                                              std::span<const u32> generated) {
 
     using namespace Common::FS;
     const auto patch_dir = GetUserPath(PathType::ShaderDir) / "patch";
@@ -786,6 +787,25 @@ std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::
     const auto filepath = patch_dir / filename;
     if (!std::filesystem::exists(filepath)) {
         return {};
+    }
+    const u64 generated_hash = XXH3_64bits(generated.data(), generated.size_bytes());
+    auto base_path = filepath;
+    base_path += ".base";
+    if (std::filesystem::exists(base_path)) {
+        const auto base_file = IOFile{base_path, FileAccessMode::Read};
+        std::string text(base_file.GetSize(), ' ');
+        base_file.ReadSpan(std::span<char>{text});
+        const u64 base_hash = std::strtoull(text.c_str(), nullptr, 16);
+        if (base_hash != generated_hash) {
+            LOG_WARNING(Loader,
+                        "Not applying patch {}: made for a different module ({:#018x}, this GPU "
+                        "generated {:#018x})",
+                        filename, base_hash, generated_hash);
+            return {};
+        }
+    } else {
+        LOG_INFO(Loader, "Patch {} has no .base file; generated module hash {:#018x}", filename,
+                 generated_hash);
     }
     const auto file = IOFile{patch_dir / filename, FileAccessMode::Read};
     std::vector<u32> code(file.GetSize() / sizeof(u32));

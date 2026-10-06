@@ -78,10 +78,10 @@ Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SOTC_FLUSH_EVERY` | 256 for SotC | periodic command submission; `0` disables |
+| `SOTC_FLUSH_EVERY` | 256 for SotC on NVIDIA, 0 on AMD/Intel | periodic command submission; `0` disables |
 | `SOTC_RB_HOT` | 2 | batched readbacks (0 off, 1 conservative, 2 any arena) |
 | `SOTC_CLEAN_READS` | 1 | clean SRT walker reads |
-| `SOTC_RB_AHEAD` | 1 | readback ahead |
+| `SOTC_RB_AHEAD` | 1 on NVIDIA, 0 on AMD/Intel | readback ahead |
 | `SOTC_EARLY_Z` | 1 for SotC | early depth tests |
 | `SOTC_WAVE64_UNIFORM` | 1 for SotC | wave64 uniform branches and LDS barriers |
 | `SOTC_LDS_BARRIERS` | 1 for SotC | subgroup barriers in multi-wave workgroups |
@@ -196,10 +196,10 @@ Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `
 
 | Variável | Padrão | Para que serve |
 |---|---|---|
-| `SOTC_FLUSH_EVERY` | 256 no SotC | envio periódico de comandos; `0` desliga |
+| `SOTC_FLUSH_EVERY` | 256 no SotC em NVIDIA, 0 em AMD/Intel | envio periódico de comandos; `0` desliga |
 | `SOTC_RB_HOT` | 2 | readbacks agrupados (0 off, 1 conservador, 2 qualquer arena) |
 | `SOTC_CLEAN_READS` | 1 | leituras limpas do walker SRT |
-| `SOTC_RB_AHEAD` | 1 | readback antecipado |
+| `SOTC_RB_AHEAD` | 1 em NVIDIA, 0 em AMD/Intel | readback antecipado |
 | `SOTC_EARLY_Z` | 1 no SotC | testes de profundidade antecipados |
 | `SOTC_WAVE64_UNIFORM` | 1 no SotC | ramos uniformes wave64 e barreiras LDS |
 | `SOTC_LDS_BARRIERS` | 1 no SotC | barreiras de subgrupo em grupos com várias waves |

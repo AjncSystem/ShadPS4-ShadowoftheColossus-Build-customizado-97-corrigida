@@ -602,12 +602,17 @@ void Rasterizer::FlushPeriodic() {
     // it run the frame during the recording. A submit inside a render pass cuts it, so wait for a
     // command outside one, up to 4 * N. From periodic_flush_commands of Pink-shadPS4
     // (luizgustavs). SOTC_FLUSH_EVERY=N sets it, 0 = off.
-    static const u32 every = [] {
+    static const u32 every = [this] {
         if (const char* v = std::getenv("SOTC_FLUSH_EVERY")) {
             return static_cast<u32>(std::strtoul(v, nullptr, 10));
         }
         // SotC: +20% fps in the open world (14-15 -> 18). Other games keep the upstream behavior.
-        return Common::ElfInfo::Instance().GameSerial() == "CUSA08809" ? 256u : 0u;
+        // Only measured on NVIDIA; Pink-shadPS4 advises turning it off on AMD (black screen).
+        constexpr u32 VendorNvidia = 0x10DE;
+        return Common::ElfInfo::Instance().GameSerial() == "CUSA08809" &&
+                       instance.GetVendorID() == VendorNvidia
+                   ? 256u
+                   : 0u;
     }();
     if (every == 0) {
         return;

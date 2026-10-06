@@ -7,7 +7,11 @@
 The game scales motion blur by per-frame motion, so at the emulator's ~16 fps (vs 30 on PS4) the
 trails were twice as long and showed as a "ghost" following Wander.
 
-Install: copy the `.spv` to `user/shader/patch/` and enable `GPU.patch_shaders` for CUSA08809.
+Install: copy the `.spv` and its `.spv.base` to `user/shader/patch/` and enable
+`GPU.patch_shaders` for CUSA08809. The `.base` file holds the hash of the module the patch was made
+from (NVIDIA). The emulator applies the patch only while the module it generates matches it: AMD
+and Intel generate a different module, and the mismatched patch crashed the Intel driver and
+broke the final image (black screen reports on AMD). There the shader simply runs unpatched.
 The SPIR-V comes from this branch's recompiler, so it must be regenerated whenever SPIR-V
 generation changes (e.g. after merging upstream): enable `GPU.dump_shaders` (and disable the
 pipeline cache so the shader is recompiled), reach gameplay, then run

@@ -1,6 +1,11 @@
 """Builds the SotC post-process patch from a dumped fs_0x00000000291dbcd0_0.spv.
 
 Usage: python make_patch.py <dumped.spv> <out.spv> [blur_scale] [exposure_scale]
+
+Also write <out.spv>.base with the hash of the dumped module, as the emulator logs it
+("Patch ... generated module hash 0x..."): the emulator only applies the patch while the
+module it generates still matches (other GPU vendors generate a different module, and a
+mismatched patch crashed the Intel driver / broke the final image).
 Needs spirv-dis / spirv-as / spirv-val (Vulkan SDK) on PATH or in C:/VulkanSDK/*/Bin.
 
 Edits, located by instruction patterns so they survive recompiler changes:

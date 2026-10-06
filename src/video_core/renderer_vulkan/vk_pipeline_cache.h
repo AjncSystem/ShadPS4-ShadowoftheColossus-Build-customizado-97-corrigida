@@ -107,8 +107,12 @@ private:
 
     void DumpShader(std::span<const u32> code, u64 hash, Shader::HwStage stage, size_t perm_idx,
                     std::string_view ext);
+    /// A patch is SPIR-V edited from the module the recompiler generated on one GPU. When a
+    /// "<patch>.base" file holds the XXH3 hash of that module, the patch only applies while the
+    /// generated module still matches it (other GPUs/drivers can get a different module).
     std::optional<std::vector<u32>> GetShaderPatch(u64 hash, Shader::HwStage stage, size_t perm_idx,
-                                                   std::string_view ext);
+                                                   std::string_view ext,
+                                                   std::span<const u32> generated);
     vk::ShaderModule CompileModule(Shader::Info& info, Shader::RuntimeInfo& runtime_info,
                                    const std::span<const u32>& code, size_t perm_idx,
                                    Shader::Backend::Bindings& binding);

@@ -281,7 +281,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     // Shader patches (user/shader/patch) must also apply to pipelines restored from the cache.
     if (EmulatorSettings.IsPatchShaders()) {
         if (auto patch = GetShaderPatch(program->info.pgm_hash, program->info.hw_stage, perm_idx,
-                                        "spv")) {
+                                        "spv", spv)) {
             LOG_INFO(Loader, "Loaded patch for cached {} shader {:#x}", program->info.hw_stage,
                      program->info.pgm_hash);
             spv = std::move(*patch);

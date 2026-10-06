@@ -272,10 +272,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     }
     // Readback ahead (idea from Pink-shadPS4, luizgustavs): when the data was written by work
     // already submitted, copy it in a command buffer of its own instead of submitting and waiting
-    // for everything recorded so far. SOTC_RB_AHEAD=0 turns it off.
-    static const bool ahead_enabled = [] {
+    // for everything recorded so far. SOTC_RB_AHEAD=0/1 forces it; by default only on NVIDIA,
+    // Pink-shadPS4 advises turning it off on AMD.
+    static const bool ahead_enabled = [this] {
         const char* v = std::getenv("SOTC_RB_AHEAD");
-        return v ? std::atoi(v) != 0 : true;
+        constexpr u32 VendorNvidia = 0x10DE;
+        return v ? std::atoi(v) != 0 : instance.GetVendorID() == VendorNvidia;
     }();
     if (ahead_enabled && !written_by_current && pending_binds.empty()) {
         const auto cmdbuf = scheduler.BeginAhead();
