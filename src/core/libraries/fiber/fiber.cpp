@@ -3,6 +3,8 @@
 
 #include "fiber.h"
 
+#include <cstdlib>
+
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "video_core/page_manager.h"
@@ -36,8 +38,20 @@ extern "C" s32 PS4_SYSV_ABI _sceFiberLongJmp(OrbisFiberContext* ctx) asm("_sceFi
 // that page was protected meanwhile (GPU page tracking over memory the game uses as a fiber or
 // thread stack), the write faults and Windows cannot even deliver the exception on that stack:
 // the process dies silently. Make sure the landing zone is writable before jumping.
+// Off by default (SOTC_STACK_PROBE=1 turns it on): fiber contexts are registered as guest stacks,
+// so the tracker never protects them, and the probe never found a protected page in testing. It
+// costs a VirtualQuery per fiber switch, which made world loading 2.5x slower on a fast CPU and
+// stalled the game's loader (black screen after the logos) on slow AMD laptops.
+static bool StackProbeEnabled() {
+    static const bool enabled = std::getenv("SOTC_STACK_PROBE") != nullptr;
+    return enabled;
+}
+
 static void EnsureStackWritable(u64 rsp) {
 #ifdef _WIN32
+    if (!StackProbeEnabled()) {
+        return;
+    }
     static constexpr u64 Below = 32_KB; // exception frames and the fault handler need room
     MEMORY_BASIC_INFORMATION mbi{};
     const u64 probe = (rsp - 8) & ~u64{0xFFF};
