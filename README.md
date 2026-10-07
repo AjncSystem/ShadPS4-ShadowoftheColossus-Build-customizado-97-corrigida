@@ -1,16 +1,16 @@
-# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.7
+# ShadPS4 · Shadow of the Colossus — custom build (97% fixed) · build customizado · SotC 0.2.8
 
 **🇺🇸 English** · [Português abaixo](#portugues)
 
 > [!IMPORTANT]
-> **To play, download SotC 0.2.7 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.7.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
+> **To play, download SotC 0.2.8 from [Releases](../../releases)** (`ShadPS4-SotC-0.2.8.rar`). The green **Code → Download ZIP** button only gets the source code, not the built emulator. Do not use the shadPS4 the Launcher downloads by itself (official/Nightly): it lacks these fixes. **Sound:** the game needs 2 files from your own PS4 firmware (see "How to use", step 2); without them it is silent.
 >
-> **Para jogar, baixe o SotC 0.2.7 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.7.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
+> **Para jogar, baixe o SotC 0.2.8 em [Releases](../../releases)** (`ShadPS4-SotC-0.2.8.rar`). O botão verde **Code → Download ZIP** traz só o código-fonte, sem o emulador pronto. Não use o shadPS4 que o Launcher baixa sozinho (oficial/Nightly): ele não tem estas correções. **Som:** o jogo precisa de 2 arquivos do firmware do seu PS4 (veja "Como usar", passo 2); sem eles fica mudo.
 
 **Unofficial** build of the [shadPS4](https://github.com/shadps4-emu/shadPS4) emulator with fixes for **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) on **Windows**. It is not distributed by the shadPS4 team. **No game files are included**: you need your own dump.
 
 ### Download
-From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.7.rar` — version **SotC 0.2.7**, shown in the emulator window title (the "Source code" entries there are only the code).
+From the **[Releases](../../releases)** tab, get `ShadPS4-SotC-0.2.8.rar` — version **SotC 0.2.8**, shown in the emulator window title (the "Source code" entries there are only the code).
 
 ### What is fixed
 - No GPU hang in the intro and no crashes when skipping the intro video or loading the save.
@@ -47,6 +47,7 @@ Every item has its cause, fix and commits in the [technical report](documents/So
 | 27 | ✅ Stack pages tracked as whole pages; GPU read-backs never write over them | random crashes after a few minutes (game heap corrupted) |
 | 28 | ✅ GPU read-back across several memory mappings (upstream bug) | corrupted game memory |
 | 29 | ✅ Buffers at unmapped (garbage) addresses bound as null | crash in the opening cutscene (video memory exhausted) |
+| 30 | ✅ No stack probe (VirtualQuery) on every fiber switch | black screen after the logos on AMD (loader stalled, ~15 s loading); loading 1.6 s → 0.6 s on an i9 |
 
 **Shader recompiler**
 | # | Fix | What it solved |
@@ -88,6 +89,7 @@ Environment variables (set them before starting `shadPS4.exe`, e.g. in a `.bat` 
 | `SOTC_ARENA_RELEASE` | off | release arena memory on unmap (experimental) |
 | `SHADPS4_LOOP_LIMIT` | 8192 for SotC | maximum loop iterations per shader |
 | `SHADPS4_REDZONE_PROTECT` | — | extra functions for red-zone protection |
+| `SOTC_STACK_PROBE` | off | re-enables the stack check on every fiber switch (slow) |
 | `SHADPS4_IEEE_MINMAX` | off | restores the old min/max/clamp |
 | `SHADPS4_ABSOLUTE_INSTANCE_ID` | off | restores the old instance ID |
 
@@ -115,7 +117,7 @@ Both can be combined. Do not enable *Sharp textures* together with the shadPS4 r
 3. Open the folder's `shadPS4QtLauncher.exe`: it comes preconfigured with this emulator (no automatic updates). The first time, pick your games folder, then double-click the game. You can also drag `eboot.bin` onto `Iniciar-SotC.bat`.
 4. The first start compiles the shaders and takes longer.
 
-Tested on Windows 11, Intel i9-13900K and NVIDIA RTX 2060 SUPER 8 GB. Not tested on AMD/Intel GPUs, Linux or macOS.
+Tested on Windows 11, Intel i9-13900K and NVIDIA RTX 2060 SUPER 8 GB, and on a Ryzen 7 5700U with integrated Radeon Vega (gets past the logos and shows the image; slow). A user ran 0.2.6 on Linux with an RX 9060 XT. Not tested on dedicated AMD GPUs on Windows or on macOS.
 
 ### Source code
 This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by commit; the original shadPS4 README is in [`README.shadPS4.md`](README.shadPS4.md). Building: same as shadPS4 ([`documents/building-windows.md`](documents/building-windows.md)). Generic fixes are marked in the report as upstream candidates.
@@ -128,7 +130,7 @@ This repository is shadPS4 itself (base `259e815a`) with the fixes, commit by co
 Build **não oficial** do emulador [shadPS4](https://github.com/shadps4-emu/shadPS4) com correções para **Shadow of the Colossus** (PS4, CUSA08809 EU, v1.01) no **Windows**. Não é distribuído pela equipe do shadPS4. **Nenhum arquivo do jogo está incluído**: você precisa do seu próprio dump.
 
 ### Baixar
-Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.7.rar` — versão **SotC 0.2.7**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
+Na aba **[Releases](../../releases)**, baixe `ShadPS4-SotC-0.2.8.rar` — versão **SotC 0.2.8**, mostrada no título da janela do emulador (o "Source code" listado lá é só o código).
 
 ### O que foi corrigido
 - Sem travamento da GPU na abertura e sem quedas ao pular o vídeo ou carregar o save.
@@ -165,6 +167,7 @@ Cada item tem causa, solução e commits no [relatório técnico](documents/SotC
 | 27 | ✅ Páginas de pilha tratadas como páginas inteiras; readback da GPU nunca escreve nelas | quedas aleatórias após alguns minutos (heap do jogo corrompido) |
 | 28 | ✅ Readback da GPU atravessando vários mapeamentos de memória (bug do upstream) | memória do jogo corrompida |
 | 29 | ✅ Buffers em endereços não mapeados (lixo) ligados como nulos | queda na cena de abertura (memória de vídeo esgotada) |
+| 30 | ✅ Sem a verificação de pilha (VirtualQuery) a cada troca de fibra | tela preta depois dos logos em AMD (carregador travado, ~15 s de carregamento); carregamento 1,6 s → 0,6 s no i9 |
 
 **Recompilador de shaders**
 | # | Correção | O que resolvia |
@@ -206,6 +209,7 @@ Variáveis de ambiente (defina antes de abrir o `shadPS4.exe`, por exemplo num `
 | `SOTC_ARENA_RELEASE` | desligado | libera memória de arena no unmap (experimental) |
 | `SHADPS4_LOOP_LIMIT` | 8192 no SotC | iterações máximas de loop por shader |
 | `SHADPS4_REDZONE_PROTECT` | — | funções extras para proteção de red zone |
+| `SOTC_STACK_PROBE` | desligado | religa a verificação de pilha a cada troca de fibra (lento) |
 | `SHADPS4_IEEE_MINMAX` | desligado | volta ao min/max/clamp antigo |
 | `SHADPS4_ABSOLUTE_INSTANCE_ID` | desligado | volta ao instance ID antigo |
 
@@ -233,7 +237,7 @@ Os dois podem ser combinados. Não ligue *Texturas nítidas* junto com o *Custom
 3. Abra o `shadPS4QtLauncher.exe` da pasta: ele já vem configurado com este emulador (sem atualizações automáticas). Na primeira vez, escolha a pasta dos jogos e dê dois cliques no jogo. Também dá para arrastar o `eboot.bin` para `Iniciar-SotC.bat`.
 4. A primeira abertura compila os shaders e demora mais.
 
-Testado em Windows 11, Intel i9-13900K e NVIDIA RTX 2060 SUPER 8 GB. Não testado em placas AMD/Intel nem em Linux/macOS.
+Testado em Windows 11, Intel i9-13900K e NVIDIA RTX 2060 SUPER 8 GB, e num Ryzen 7 5700U com Radeon Vega integrada (passa dos logos e mostra a imagem; lento). Um usuário rodou a 0.2.6 no Linux com uma RX 9060 XT. Não testado em placas AMD dedicadas no Windows nem no macOS.
 
 ### Código-fonte
 Este repositório é o próprio shadPS4 (base `259e815a`) com as correções, commit por commit; o README original do shadPS4 está em [`README.shadPS4.md`](README.shadPS4.md). Compilação: igual ao shadPS4 ([`documents/building-windows.md`](documents/building-windows.md)). As correções genéricas estão marcadas no relatório como candidatas ao shadPS4 oficial.
