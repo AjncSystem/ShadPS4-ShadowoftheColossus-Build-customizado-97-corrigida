@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <boost/container/static_vector.hpp>
 #include <xxhash.h>
 
@@ -99,6 +100,12 @@ public:
 
     const GraphicsPipelineKey& GetGraphicsKey() const {
         return key;
+    }
+
+    /// sotc: a pipeline built on a background thread was given copies of the stage infos;
+    /// once it is published it must read the live ones (their user data changes every draw).
+    void PublishStages(std::span<const Shader::Info* const, MaxShaderStages> live) {
+        std::copy(live.begin(), live.end(), stages.begin());
     }
 
     /// Gets the attributes and bindings for vertex inputs.

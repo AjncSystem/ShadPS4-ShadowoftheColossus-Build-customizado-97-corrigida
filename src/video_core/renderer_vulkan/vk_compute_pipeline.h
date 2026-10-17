@@ -50,6 +50,12 @@ public:
                     vk::ShaderModule module, SerializationSupport& sdata, bool preloading);
     ~ComputePipeline();
 
+    /// sotc: a pipeline built on a background thread was given a copy of the stage info; once
+    /// published it must read the live one (its user data changes every dispatch).
+    void PublishStage(const Shader::Info* live) {
+        stages[int(Shader::SwStage::Compute)] = live;
+    }
+
 private:
     ComputePipelineKey compute_key;
 };

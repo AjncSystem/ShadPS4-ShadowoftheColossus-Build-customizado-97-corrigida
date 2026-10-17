@@ -148,6 +148,10 @@ jobs:
     runs-on: windows-2025-vs2026
     needs: get-info
     steps:
+    # The fork's long repository name pushes submodule paths past the Windows 260-character limit.
+    - name: Enable long paths in git
+      run: git config --system core.longpaths true
+
     - uses: actions/checkout@v6
       with:
         submodules: recursive

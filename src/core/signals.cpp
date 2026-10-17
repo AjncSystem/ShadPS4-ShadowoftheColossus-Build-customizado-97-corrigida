@@ -181,6 +181,7 @@ static LONG WINAPI SignalHandlerImpl(EXCEPTION_POINTERS* pExp) noexcept {
 // arrives on a stack that is not the thread's own host stack, run the handler on a per-thread
 // host stack instead; only the frame the kernel pushes stays on the guest stack.
 asm(R"(
+    .intel_syntax noprefix
     .text
     .p2align 4
     .globl shad_call_on_stack
@@ -193,6 +194,7 @@ shad_call_on_stack:
     mov rsp, rbp
     pop rbp
     ret
+    .att_syntax prefix
 )");
 extern "C" LONG shad_call_on_stack(EXCEPTION_POINTERS* pExp, LONG (*fn)(EXCEPTION_POINTERS*),
                                    void* stack_top);
